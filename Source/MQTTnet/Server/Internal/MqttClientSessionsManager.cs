@@ -30,7 +30,17 @@ namespace MQTTnet.Server
         readonly MqttPacketFactories _packetFactories = new MqttPacketFactories();
 
         readonly MqttRetainedMessagesManager _retainedMessagesManager;
+        readonly MqttPersistedSessionManager _persistedSessionManager;
+        readonly MqttApplicationMessageFactory _applicationMessageFactory;
+
         readonly IMqttNetLogger _rootLogger;
+
+        // Event key is ClientId, event args is null
+        readonly KeyEventSchedule<string, object> _sessionExpiryEvents;
+        // Event key it client ID, event arg is WillMessage
+        readonly KeyEventSchedule<string, MqttApplicationMessage> _willDelayEvents;
+        // Event key it topic, event arg is null
+        readonly KeyEventSchedule<string, object> _retainedMessageExpiryEvents;
 
         // The _sessions dictionary contains all session, the _subscriberSessions hash set contains subscriber sessions only.
         // See the MqttSubscription object for a detailed explanation.
@@ -42,6 +52,7 @@ namespace MQTTnet.Server
         public MqttClientSessionsManager(
             MqttServerOptions options,
             MqttRetainedMessagesManager retainedMessagesManager,
+            MqttPersistedSessionManager persistedSessionManager,
             MqttServerEventContainer eventContainer,
             IMqttNetLogger logger)
         {
@@ -55,7 +66,65 @@ namespace MQTTnet.Server
 
             _options = options ?? throw new ArgumentNullException(nameof(options));
             _retainedMessagesManager = retainedMessagesManager ?? throw new ArgumentNullException(nameof(retainedMessagesManager));
+            _persistedSessionManager = persistedSessionManager ?? throw new ArgumentNullException(nameof(persistedSessionManager));
+            _applicationMessageFactory = new MqttApplicationMessageFactory();
             _eventContainer = eventContainer ?? throw new ArgumentNullException(nameof(eventContainer));
+            _sessionExpiryEvents = new KeyEventSchedule<string, object>(OnSessionExpiredEvent, default);
+            _willDelayEvents = new KeyEventSchedule<string, MqttApplicationMessage>(OnWillDelayExpiredEvent, default);
+            _retainedMessageExpiryEvents = new KeyEventSchedule<string, object>(OnRetainedMessageExpiredEvent, default);
+        }
+
+        /// <summary>
+        /// Load persistent messages when MQTT server starts before client connections are allowed.
+        /// </summary>
+        public async Task LoadPersistedSessionsAsync()
+        {
+            if (_persistedSessionManager.IsWritable)
+            {
+                throw new InvalidOperationException("Persisted sessions already loaded");
+            }
+
+            // Load sessions from storage so that messages can be queued for offline clients;
+            // _persistedSessionManager 'IsWritable == false' at this stage so that no additional storage
+            // attempts are made while subscriptions are being restored.
+
+            var persistedSessions = await _persistedSessionManager.LoadSessionsAsync().ConfigureAwait(false);
+
+            foreach (var persistedSession in persistedSessions)
+            {
+                // restore session for client
+                var clientId = persistedSession.ClientId;
+                // session items are not persisted and remain empty
+                var sessionItems = new Dictionary<object, object>();
+                var clientSession = CreateSession(clientId, sessionItems, true, persistedSession.SessionExpiryInterval, persistedSession.WillDelayInterval);
+                _sessions[clientId] = clientSession;
+                // restore subscriptions for client
+                if (persistedSession.SubscriptionsByTopic != null)
+                {
+                    var topicFilters = persistedSession.SubscriptionsByTopic.Values.ToList();
+                    // Subscribe will not attempt to (re-)store the subscription because the 
+                    // _persistedSessionManager is not yet 'writable'. 
+                    await SubscribeAsync(clientId, topicFilters, true).ConfigureAwait(false);
+                }
+            }
+
+            // Loading of persisted queued messages is deferred until clients reconnect
+        }
+
+        public int GetNumClients()
+        {
+            lock (_clients)
+            {
+                return _clients.Count;
+            }
+        }
+
+        public int GetNumSessions()
+        {
+            lock (_sessions)
+            {
+                return _sessions.Count;
+            }
         }
 
         public async Task CloseAllConnectionsAsync()
@@ -135,7 +204,7 @@ namespace MQTTnet.Server
             {
                 if (applicationMessage.Retain)
                 {
-                    await _retainedMessagesManager.UpdateMessage(senderId, applicationMessage).ConfigureAwait(false);
+                    await _retainedMessagesManager.UpdateMessageAsync(senderId, applicationMessage).ConfigureAwait(false);
                 }
 
                 var deliveryCount = 0;
@@ -145,6 +214,9 @@ namespace MQTTnet.Server
                     // only subscriber clients are of interest here.
                     subscriberSessions = _subscriberSessions.ToList();
                 }
+
+                // Remains null unless messages need to be persisted for clients:
+                List<MqttPersistedApplicationMessageClient> persistingApplicationMessageClients = null;
 
                 // Calculate application message topic hash once for subscription checks
                 MqttSubscription.CalculateTopicHash(applicationMessage.Topic, out var topicHash, out _, out _);
@@ -169,6 +241,26 @@ namespace MQTTnet.Server
                     if (newPublishPacket.QualityOfServiceLevel > 0)
                     {
                         newPublishPacket.PacketIdentifier = session.PacketIdentifierProvider.GetNextPacketIdentifier();
+
+                        if (session.IsPersistent && _persistedSessionManager.IsWritable)
+                        {
+                            if (persistingApplicationMessageClients == null)
+                            {
+                                persistingApplicationMessageClients = new List<MqttPersistedApplicationMessageClient>();
+                            }
+                            persistingApplicationMessageClients.Add(
+                                new MqttPersistedApplicationMessageClient(
+                                    session.Id,
+                                    checkSubscriptionsResult.QualityOfServiceLevel,
+                                    checkSubscriptionsResult.SubscriptionIdentifiers
+                                    )
+                                );
+                        }
+                    }
+
+                    if (applicationMessage.MessageExpiryInterval > 0)
+                    {
+                        newPublishPacket.MessageExpiryTimestamp = DateTime.UtcNow.AddSeconds(applicationMessage.MessageExpiryInterval);
                     }
 
                     if (checkSubscriptionsResult.RetainAsPublished)
@@ -181,13 +273,39 @@ namespace MQTTnet.Server
                         newPublishPacket.Retain = false;
                     }
 
+                    // TODO:
+                    // Review: there is currently nothing that removes an expired message from the queue.
+                    // The message is simply skipped when packets are processed.
+
                     session.EnqueuePacket(new MqttPacketBusItem(newPublishPacket));
                     deliveryCount++;
 
                     _logger.Verbose("Client '{0}': Queued PUBLISH packet with topic '{1}'.", session.Id, applicationMessage.Topic);
                 }
 
-                await FireApplicationMessageNotConsumedEvent(applicationMessage, deliveryCount, senderId);
+                if (deliveryCount == 0)
+                {
+                    await FireApplicationMessageNotConsumedEvent(applicationMessage, deliveryCount, senderId);
+                }
+                else if (persistingApplicationMessageClients != null)
+                {
+                    // persist message for one or more clients
+                    await _persistedSessionManager.AddMessageAsync(applicationMessage, persistingApplicationMessageClients).ConfigureAwait(false);
+                }
+
+                if (applicationMessage.Retain)
+                {
+                    if ((applicationMessage.MessageExpiryInterval > 0) && (applicationMessage.Payload != null) && (applicationMessage.Payload.Length > 0))
+                    {
+                        // schedule expiry
+                        _retainedMessageExpiryEvents.AddOrUpdateEvent(applicationMessage.MessageExpiryInterval, applicationMessage.Topic, null);
+                    }
+                    else
+                    {
+                        // Payload empty or retain forever; remove expiry event if it exists
+                        _retainedMessageExpiryEvents.RemoveEvent(applicationMessage.Topic);
+                    }
+                }
             }
             catch (Exception exception)
             {
@@ -333,6 +451,20 @@ namespace MQTTnet.Server
                             {
                                 await DeleteSessionAsync(client.Id).ConfigureAwait(false);
                             }
+                            else
+                            {
+                                if (client.Session.SessionExpiryInterval != uint.MaxValue) // if not keep forever then expire
+                                {
+                                    if (_persistedSessionManager.IsWritable)
+                                    {
+                                        // update store with expiry timestamp
+                                        var expiryTimeStamp = DateTime.UtcNow.AddSeconds(client.Session.SessionExpiryInterval);
+                                        await _persistedSessionManager.UpdateSessionExpiryTimestampAsync(client.Id, expiryTimeStamp).ConfigureAwait(false);
+                                    }
+                                    // schedule expiry
+                                    _sessionExpiryEvents.AddOrUpdateEvent(client.Session.SessionExpiryInterval, client.Id, client.Id);
+                                }
+                            }
                         }
                     }
 
@@ -400,7 +532,7 @@ namespace MQTTnet.Server
             }
         }
 
-        public async Task SubscribeAsync(string clientId, ICollection<MqttTopicFilter> topicFilters)
+        public async Task SubscribeAsync(string clientId, ICollection<MqttTopicFilter> topicFilters, bool asEstablishedSubscription = false)
         {
             if (clientId == null)
             {
@@ -424,7 +556,19 @@ namespace MQTTnet.Server
                 foreach (var retainedApplicationMessage in subscribeResult.RetainedMessages)
                 {
                     var publishPacket = _packetFactories.Publish.Create(retainedApplicationMessage.ApplicationMessage);
-                    clientSession.EnqueuePacket(new MqttPacketBusItem(publishPacket));
+                    /* 
+                     * MQTT 3.1.1 spec
+                     * When sending a PUBLISH Packet to a Client the Server MUST set the RETAIN flag to 1 if a message is sent as a result 
+                     * of a new subscription being made by a Client [MQTT-3.3.1-8]. It MUST set the RETAIN flag to 0 when a PUBLISH Packet is 
+                     * sent to a Client because it matches an established subscription regardless of how the flag was set in the message it
+                     * received [MQTT-3.3.1-9].
+                     */
+                    if (asEstablishedSubscription)
+                    {
+                        publishPacket.Retain = false;
+                    }
+                    // TODO, REVIEW. Quality of service level irrelevant. If > AtMostOnce then we need a packet identifier
+                    publishPacket.QualityOfServiceLevel = MqttQualityOfServiceLevel.AtMostOnce; clientSession.EnqueuePacket(new MqttPacketBusItem(publishPacket));
                 }
             }
         }
@@ -456,6 +600,8 @@ namespace MQTTnet.Server
             MqttClient connection;
 
             bool sessionShouldPersist;
+            bool startWithCleanSession;
+            uint persistedSessionExpiryInterval = uint.MaxValue; // infinite by default for persisted MQTT 3.1.1 sessions
 
             if (validatingConnectionEventArgs.ProtocolVersion == MqttProtocolVersion.V500)
             {
@@ -467,7 +613,9 @@ namespace MQTTnet.Server
                 // in each time it connects.
 
                 // Persist if SessionExpiryInterval != 0, but may start with a clean session
-                sessionShouldPersist = validatingConnectionEventArgs.SessionExpiryInterval != 0;
+                persistedSessionExpiryInterval = validatingConnectionEventArgs.SessionExpiryInterval;
+                sessionShouldPersist = persistedSessionExpiryInterval != 0;
+                startWithCleanSession = connectPacket.CleanSession;
             }
             else
             {
@@ -478,7 +626,13 @@ namespace MQTTnet.Server
                 // reused in any subsequent Session [MQTT-3.1.2-6].
 
                 sessionShouldPersist = !connectPacket.CleanSession;
+                startWithCleanSession = connectPacket.CleanSession;
             }
+
+            // Prevent potential session expiry by removing any expiry event
+            _sessionExpiryEvents.RemoveEvent(connectPacket.ClientId);
+            // Prevent potentially delayed will message being sent
+            _willDelayEvents.RemoveEvent(connectPacket.ClientId);
 
             using (await _createConnectionSyncRoot.WaitAsync(CancellationToken.None).ConfigureAwait(false))
             {
@@ -487,21 +641,23 @@ namespace MQTTnet.Server
                 {
                     if (!_sessions.TryGetValue(connectPacket.ClientId, out session))
                     {
-                        session = CreateSession(connectPacket.ClientId, validatingConnectionEventArgs.SessionItems, sessionShouldPersist);
+                        session = CreateSession(connectPacket.ClientId, validatingConnectionEventArgs.SessionItems, sessionShouldPersist, persistedSessionExpiryInterval, connectPacket.WillDelayInterval);
                     }
                     else
                     {
                         if (connectPacket.CleanSession)
                         {
                             _logger.Verbose("Deleting existing session of client '{0}'.", connectPacket.ClientId);
-                            session = CreateSession(connectPacket.ClientId, validatingConnectionEventArgs.SessionItems, sessionShouldPersist);
+                            session = CreateSession(connectPacket.ClientId, validatingConnectionEventArgs.SessionItems, sessionShouldPersist, persistedSessionExpiryInterval, connectPacket.WillDelayInterval);
                         }
                         else
                         {
                             _logger.Verbose("Reusing existing session of client '{0}'.", connectPacket.ClientId);
+                            connAckPacket.IsSessionPresent = true;
                             // Session persistence could change for MQTT 5 clients that reconnect with different SessionExpiryInterval
                             session.IsPersistent = sessionShouldPersist;
-                            connAckPacket.IsSessionPresent = true;
+                            session.SessionExpiryInterval = persistedSessionExpiryInterval;
+                            session.WillDelayInterval = connectPacket.WillDelayInterval;
                             session.Recover();
                         }
                     }
@@ -543,6 +699,57 @@ namespace MQTTnet.Server
                         await _eventContainer.ClientDisconnectedEvent.InvokeAsync(eventArgs).ConfigureAwait(false);
                     }
                 }
+
+
+                // Any previously existing client is disconnected now; queue persisted messages (if any) for new session
+                
+                if (_persistedSessionManager.IsWritable)
+                {
+                    if (startWithCleanSession)
+                    {
+                        // This will remove the session and queued messages from the store
+                        await _persistedSessionManager.RemoveSessionAsync(connectPacket.ClientId).ConfigureAwait(false);
+                    }
+                    if (sessionShouldPersist)
+                    {
+                        MqttApplicationMessage willMessage = null;
+                        uint? willDelayInterval = null;
+                        if (connectPacket.WillFlag)
+                        {
+                            var willPublishPacket = _packetFactories.Publish.Create(connectPacket);
+                            willMessage = _applicationMessageFactory.Create(willPublishPacket);
+                            willDelayInterval = connectPacket.WillDelayInterval;
+                        }
+                        // Add or update session parameters
+                        await _persistedSessionManager.AddOrUpdateSessionAsync(
+                            connectPacket.ClientId,
+                            willMessage,
+                            willDelayInterval.GetValueOrDefault(),
+                            session.SessionExpiryInterval
+                            ).ConfigureAwait(false);
+                    }
+                    if ((!startWithCleanSession) && (!session.PersistedMessagesAreRestored))
+                    {
+                        //  Restore and queue persisted messages if there are any
+                        var persistedMessages = await _persistedSessionManager.LoadSessionMessagesAsync(connectPacket.ClientId).ConfigureAwait(false);
+                        foreach (var message in persistedMessages)
+                        {
+                            var publishPacket = _packetFactories.Publish.Create(message.ApplicationMessage);
+                            // adjust publish packet with granted Qos Level and subscription identifers as at the time of publishing (DispatchPublishPacket)
+                            publishPacket.QualityOfServiceLevel = message.CheckedQualityOfServiceLevel;
+                            if ((message.CheckedSubscriptionIdentifiers != null) && (message.CheckedSubscriptionIdentifiers.Count > 0))
+                            {
+                                publishPacket.SubscriptionIdentifiers.AddRange(message.CheckedSubscriptionIdentifiers);
+                            }
+                            publishPacket.PacketIdentifier = session.PacketIdentifierProvider.GetNextPacketIdentifier();
+                            publishPacket.PersistedMessageKey = message.PersistedMessageKey;
+                            session.EnqueuePacket(new MqttPacketBusItem(publishPacket));
+                        }
+                        // Set flag to indicate that messages are now tracked in memory with the persisted session manager kept in sync.
+                        // If client disconnects and reconnects while server is running then loading of session messages from storage is not required.
+                        session.PersistedMessagesAreRestored = true;
+                    }
+                }
             }
 
             return connection;
@@ -553,11 +760,22 @@ namespace MQTTnet.Server
             return new MqttClient(connectPacket, channelAdapter, session, _options, _eventContainer, this, _rootLogger);
         }
 
-        MqttSession CreateSession(string clientId, IDictionary sessionItems, bool isPersistent)
+        MqttSession CreateSession(string clientId, IDictionary sessionItems, bool isPersistent, uint sessionExpiryInterval, uint willDelayInterval)
         {
             _logger.Verbose("Created a new session for client '{0}'.", clientId);
 
-            return new MqttSession(clientId, isPersistent, sessionItems, _options, _eventContainer, _retainedMessagesManager, this);
+            return new MqttSession(
+                clientId,
+                isPersistent,
+                sessionExpiryInterval,
+                willDelayInterval,
+                sessionItems,
+                _options,
+                _eventContainer,
+                _retainedMessagesManager,
+                _persistedSessionManager,
+                this
+                );
         }
 
         async Task FireApplicationMessageNotConsumedEvent(MqttApplicationMessage applicationMessage, int deliveryCount, string senderId)
@@ -642,6 +860,66 @@ namespace MQTTnet.Server
             }
 
             return context;
+        }
+
+        public void ScheduleWillMessage(string clientId, MqttApplicationMessage willMessage, uint delayInterval)
+        {
+            _willDelayEvents.AddOrUpdateEvent(delayInterval, clientId, willMessage);
+        }
+
+        public async Task OnSessionExpiredEvent(string expiredSessionClientId, object args, CancellationToken cancellationToken)
+        {
+            using (await _createConnectionSyncRoot.WaitAsync(cancellationToken).ConfigureAwait(false))
+            {
+                // This is inside _createConnectionSyncRoot to warrant consistent behaviour in HandleClientConnectionAsync
+
+                bool isConnected;
+
+                lock (_clients)
+                {
+                    isConnected = _clients.ContainsKey(expiredSessionClientId);
+                }
+
+                // if not reconnected then delete
+
+                if (!isConnected)
+                {
+                    if (_persistedSessionManager.IsWritable)
+                    {
+                        await _persistedSessionManager.RemoveSessionAsync(expiredSessionClientId);
+                    }
+
+                    await DeleteSessionAsync(expiredSessionClientId).ConfigureAwait(false);
+                }
+            }
+        }
+
+        public Task OnWillDelayExpiredEvent(string clientId, MqttApplicationMessage willMessage, CancellationToken cancellationToken)
+        {
+            bool isConnected;
+
+            lock (_clients)
+            {
+                isConnected = _clients.ContainsKey(clientId);
+            }
+
+            if (!isConnected)
+            {
+                // Still not connected, send will message
+                /*
+                 * The Server delays publishing the Client’s Will Message until the Will Delay Interval has passed or the Session ends, 
+                 * whichever happens first. If a new Network Connection to this Session is made before the Will Delay Interval has passed, 
+                 * the Server MUST NOT send the Will Message [MQTT-3.1.3-9].
+                 */
+                return DispatchApplicationMessage(clientId, willMessage);
+            }
+
+            return Implementations.PlatformAbstractionLayer.CompletedTask;
+        }
+
+        public Task OnRetainedMessageExpiredEvent(string topic, object args, CancellationToken cancellationToken)
+        {
+            return _retainedMessagesManager.RemoveMessageAsync(topic);
         }
     }
 }

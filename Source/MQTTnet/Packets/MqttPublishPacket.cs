@@ -17,6 +17,11 @@ namespace MQTTnet.Packets
 
         public uint MessageExpiryInterval { get; set; }
 
+        /// <summary>
+        /// MessageExpiryTimestamp is set when Message Expiry Interval is != 0 so that it can be determined whether the message has expired
+        /// </summary>
+        public System.DateTime? MessageExpiryTimestamp { get; set; }
+
         public byte[] Payload { get; set; }
 
         public MqttPayloadFormatIndicator PayloadFormatIndicator { get; set; } = MqttPayloadFormatIndicator.Unspecified;
@@ -34,6 +39,12 @@ namespace MQTTnet.Packets
         public ushort TopicAlias { get; set; }
 
         public List<MqttUserProperty> UserProperties { get; set; }
+
+        /// <summary>
+        /// Opaque object returned by the persisted session manager as a reference to the persisted message.
+        /// This property is null if the Publish Packet was not persisted.
+        /// </summary>
+        public object PersistedMessageKey { get; set; }
 
         public override string ToString()
         {

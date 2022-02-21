@@ -525,14 +525,18 @@ namespace MQTTnet.Tests.Server
             var serverOptions = new MQTTnet.Server.MqttServerOptions();
             var eventContainer = new MQTTnet.Server.MqttServerEventContainer();
             var retainedMessagesManager = new MqttRetainedMessagesManager(eventContainer, logger);
-            var sessionManager = new MqttClientSessionsManager(serverOptions, retainedMessagesManager, eventContainer, logger);
+            var persistedSessionManager = new MqttPersistedSessionManager(eventContainer, logger);
+            var sessionManager = new MqttClientSessionsManager(serverOptions, retainedMessagesManager, persistedSessionManager, eventContainer, logger);
             _clientSession = new MQTTnet.Server.MqttSession(
                         ClientId,
                         false,
+                        0,
+                        0,
                         new Dictionary<object, object>(),
                         serverOptions,
                         eventContainer,
                         retainedMessagesManager,
+                        persistedSessionManager,
                         sessionManager
                         );
 

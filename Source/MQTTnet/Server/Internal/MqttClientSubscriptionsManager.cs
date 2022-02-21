@@ -19,6 +19,7 @@ namespace MQTTnet.Server
         readonly MqttServerEventContainer _eventContainer;
         readonly Dictionary<ulong, HashSet<MqttSubscription>> _noWildcardSubscriptionsByTopicHash = new Dictionary<ulong, HashSet<MqttSubscription>>();
         readonly MqttRetainedMessagesManager _retainedMessagesManager;
+        readonly MqttPersistedSessionManager _persistedSessionManager;
 
         readonly MqttSession _session;
 
@@ -33,17 +34,24 @@ namespace MQTTnet.Server
         readonly SemaphoreSlim _subscriptionsLock = new SemaphoreSlim(1);
         readonly Dictionary<ulong, TopicHashMaskSubscriptions> _wildcardSubscriptionsByTopicHash = new Dictionary<ulong, TopicHashMaskSubscriptions>();
 
+        // statistics
+        static long _totalNumSubscriptions;
+
         public MqttClientSubscriptionsManager(
             MqttSession session,
             MqttServerEventContainer eventContainer,
             MqttRetainedMessagesManager retainedMessagesManager,
+            MqttPersistedSessionManager persistedSessionManager,
             ISubscriptionChangedNotification subscriptionChangedNotification)
         {
             _session = session ?? throw new ArgumentNullException(nameof(session));
             _eventContainer = eventContainer ?? throw new ArgumentNullException(nameof(eventContainer));
             _retainedMessagesManager = retainedMessagesManager ?? throw new ArgumentNullException(nameof(retainedMessagesManager));
+            _persistedSessionManager = persistedSessionManager ?? throw new ArgumentNullException(nameof(persistedSessionManager));
             _subscriptionChangedNotification = subscriptionChangedNotification;
         }
+
+        public static long TotalNumSubscriptions => Interlocked.Read(ref _totalNumSubscriptions);
 
         public CheckSubscriptionsResult CheckSubscriptions(string topic, ulong topicHash, MqttQualityOfServiceLevel applicationMessageQoSLevel, string senderClientId)
         {
@@ -168,7 +176,7 @@ namespace MQTTnet.Server
                 throw new ArgumentNullException(nameof(subscribePacket));
             }
 
-            var retainedApplicationMessages = await _retainedMessagesManager.GetMessages().ConfigureAwait(false);
+            var retainedApplicationMessages = await _retainedMessagesManager.GetMessagesAsync().ConfigureAwait(false);
             var result = new SubscribeResult
             {
                 ReasonCodes = new List<MqttSubscribeReasonCode>(subscribePacket.TopicFilters.Count)
@@ -198,6 +206,12 @@ namespace MQTTnet.Server
                 if (!processSubscription || string.IsNullOrEmpty(finalTopicFilter.Topic))
                 {
                     continue;
+                }
+
+                // persist session if required
+                if (_persistedSessionManager.IsWritable && _session.IsPersistent)
+                {
+                    await _persistedSessionManager.AddOrUpdateSubscriptionAsync(_session.Id, finalTopicFilter).ConfigureAwait(false);
                 }
 
                 var createSubscriptionResult = CreateSubscription(finalTopicFilter, subscribePacket.SubscriptionIdentifier, subscriptionEventArgs.Response.ReasonCode);
@@ -260,6 +274,11 @@ namespace MQTTnet.Server
 
                     if (interceptorContext.ProcessUnsubscription)
                     {
+                        if (_subscriptions.Remove(topicFilter))
+                        {
+                            Interlocked.Decrement(ref _totalNumSubscriptions);
+                        }
+
                         _subscriptions.Remove(topicFilter);
 
                         // must remove subscription object from topic hash dictionary also
@@ -288,6 +307,11 @@ namespace MQTTnet.Server
                         }
 
                         removedSubscriptions.Add(topicFilter);
+
+                        if (_persistedSessionManager.IsWritable && _session.IsPersistent)
+                        {
+                            await _persistedSessionManager.RemoveSubscriptionAsync(_session.Id, topicFilter).ConfigureAwait(false);
+                        }
                     }
                 }
             }
@@ -379,6 +403,11 @@ namespace MQTTnet.Server
 
                 isNewSubscription = existingSubscription == null;
                 _subscriptions[topicFilter.Topic] = subscription;
+
+                if (isNewSubscription)
+                {
+                    Interlocked.Increment(ref _totalNumSubscriptions);
+                }
 
                 // Add or re-add to topic hash dictionary
                 if (hasWildcard)

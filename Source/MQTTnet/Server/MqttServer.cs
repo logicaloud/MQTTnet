@@ -25,6 +25,7 @@ namespace MQTTnet.Server
         readonly MqttServerOptions _options;
         readonly IMqttNetLogger _rootLogger;
         readonly MqttRetainedMessagesManager _retainedMessagesManager;
+        readonly MqttPersistedSessionManager _persistedSessionManager;
         readonly MqttServerKeepAliveMonitor _keepAliveMonitor;
         readonly MqttClientSessionsManager _clientSessionsManager;
         
@@ -45,9 +46,12 @@ namespace MQTTnet.Server
             _logger = logger.WithSource(nameof(MqttServer));
 
             _retainedMessagesManager = new MqttRetainedMessagesManager(_eventContainer, _rootLogger);
-            _clientSessionsManager = new MqttClientSessionsManager(options, _retainedMessagesManager, _eventContainer, _rootLogger);
+            _persistedSessionManager = new MqttPersistedSessionManager(_eventContainer, _rootLogger);
+            _clientSessionsManager = new MqttClientSessionsManager(_options, _retainedMessagesManager, _persistedSessionManager, _eventContainer, _rootLogger);
             _keepAliveMonitor = new MqttServerKeepAliveMonitor(options, _clientSessionsManager, _rootLogger);
         }
+
+        #region General Events
 
         public event Func<ApplicationMessageNotConsumedEventArgs, Task> ApplicationMessageNotConsumedAsync
         {
@@ -109,28 +113,34 @@ namespace MQTTnet.Server
             remove => _eventContainer.InterceptingUnsubscriptionEvent.RemoveHandler(value);
         }
 
-        public event Func<LoadingRetainedMessagesEventArgs, Task> LoadingRetainedMessageAsync
-        {
-            add => _eventContainer.LoadingRetainedMessagesEvent.AddHandler(value);
-            remove => _eventContainer.LoadingRetainedMessagesEvent.RemoveHandler(value);
-        }
-
-        public event Func<EventArgs, Task> PreparingSessionAsync
-        {
-            add => _eventContainer.PreparingSessionEvent.AddHandler(value);
-            remove => _eventContainer.PreparingSessionEvent.RemoveHandler(value);
-        }
-
         public event Func<RetainedMessageChangedEventArgs, Task> RetainedMessageChangedAsync
         {
             add => _eventContainer.RetainedMessageChangedEvent.AddHandler(value);
             remove => _eventContainer.RetainedMessageChangedEvent.RemoveHandler(value);
         }
 
+        public event Func<RetainedMessageRemovedEventArgs, Task> RetainedMessageRemovedAsync
+        {
+            add => _eventContainer.RetainedMessageRemovedEvent.AddHandler(value);
+            remove => _eventContainer.RetainedMessageRemovedEvent.RemoveHandler(value);
+        }
+
+        public event Func<LoadingRetainedMessagesEventArgs, Task> LoadingRetainedMessageAsync
+        {
+            add => _eventContainer.LoadingRetainedMessagesEvent.AddHandler(value);
+            remove => _eventContainer.LoadingRetainedMessagesEvent.RemoveHandler(value);
+        }
+
         public event Func<EventArgs, Task> RetainedMessagesClearedAsync
         {
             add => _eventContainer.RetainedMessagesClearedEvent.AddHandler(value);
             remove => _eventContainer.RetainedMessagesClearedEvent.RemoveHandler(value);
+        }
+
+        public event Func<EventArgs, Task> PreparingSessionAsync
+        {
+            add => _eventContainer.PreparingSessionEvent.AddHandler(value);
+            remove => _eventContainer.PreparingSessionEvent.RemoveHandler(value);
         }
 
         public event Func<SessionDeletedEventArgs, Task> SessionDeletedAsync
@@ -157,13 +167,102 @@ namespace MQTTnet.Server
             remove => _eventContainer.ValidatingConnectionEvent.RemoveHandler(value);
         }
 
+        #endregion
+
+        #region Persisted Session Events
+
+        public event Func<LoadPersistedSessionsEventArgs, Task> LoadPersistedSessionsAsync
+        {
+            add => _eventContainer.LoadPersistedSessionsEvent.AddHandler(value);
+            remove => _eventContainer.LoadPersistedSessionsEvent.RemoveHandler(value);
+        }
+
+        public event Func<AddOrUpdatePersistedSessionEventArgs, Task> AddOrUpdatePersistedSessionAsync
+        {
+            add => _eventContainer.AddOrUpdatePersistedSessionEvent.AddHandler(value);
+            remove => _eventContainer.AddOrUpdatePersistedSessionEvent.RemoveHandler(value);
+        }
+
+        public event Func<RemovePersistedSessionEventArgs, Task> RemovePersistedSessionAsync
+        {
+            add => _eventContainer.RemovePersistedSessionEvent.AddHandler(value);
+            remove => _eventContainer.RemovePersistedSessionEvent.RemoveHandler(value);
+        }
+
+        public event Func<UpdatePersistedSessionExpiryTimestampEventArgs, Task> UpdatePersistedSessionExpiryTimestampAsync
+        {
+            add => _eventContainer.UpdatePersistedSessionExpiryTimestampEvent.AddHandler(value);
+            remove => _eventContainer.UpdatePersistedSessionExpiryTimestampEvent.RemoveHandler(value);
+        }
+
+        public event Func<AddOrUpdatePersistedSubscriptionEventArgs, Task> AddOrUpdatePersistedSubscriptionAsync
+        {
+            add => _eventContainer.AddOrUpdatePersistedSubscriptionEvent.AddHandler(value);
+            remove => _eventContainer.AddOrUpdatePersistedSubscriptionEvent.RemoveHandler(value);
+        }
+
+        public event Func<RemovePersistedSubscriptionEventArgs, Task> RemovePersistedSubscriptionAsync
+        {
+            add => _eventContainer.RemovePersistedSubscriptionEvent.AddHandler(value);
+            remove => _eventContainer.RemovePersistedSubscriptionEvent.RemoveHandler(value);
+        }
+
+        public event Func<LoadPersistedSessionMessagesEventArgs, Task> LoadPersistedSessionMessagesAsync
+        {
+            add => _eventContainer.LoadPersistedSessionMessagesEvent.AddHandler(value);
+            remove => _eventContainer.LoadPersistedSessionMessagesEvent.RemoveHandler(value);
+        }
+
+        public event Func<AddPersistedSessionMessageEventArgs, Task> AddPersistedSessionMessageAsync
+        {
+            add => _eventContainer.AddPersistedSessionMessageEvent.AddHandler(value);
+            remove => _eventContainer.AddPersistedSessionMessageEvent.RemoveHandler(value);
+        }
+
+        public event Func<RemovePersistedSessionMessageEventArgs, Task> RemovePersistedSessionMessageAsync
+        {
+            add => _eventContainer.RemovePersistedSessionMessageEvent.AddHandler(value);
+            remove => _eventContainer.RemovePersistedSessionMessageEvent.RemoveHandler(value);
+        }
+
+        public event Func<ClearPersistedSessionsEventArgs, Task> ClearPersistedSessionsAsync
+        {
+            add => _eventContainer.ClearPersistedSessionsEvent.AddHandler(value);
+            remove => _eventContainer.ClearPersistedSessionsEvent.RemoveHandler(value);
+        }
+
+        public event Func<UnloadPersistedSessionsEventArgs, Task> UnloadPersistedSessionsAsync
+        {
+            add => _eventContainer.UnloadPersistedSessionsEvent.AddHandler(value);
+            remove => _eventContainer.UnloadPersistedSessionsEvent.RemoveHandler(value);
+        }
+
+        #endregion
+
+        public void GetStatistics(
+            out int numClients,
+            out int numSessions,
+            out int numSubscriptions,
+            out long numMessagesReceived,
+            out long numMessagesSent,
+            out long numRetainedMessages
+            )
+        {
+            numClients = _clientSessionsManager.GetNumClients();
+            numSessions = _clientSessionsManager.GetNumSessions();
+            numSubscriptions = (int)MqttClientSubscriptionsManager.TotalNumSubscriptions;
+            numMessagesReceived = MqttClientStatistics.TotalNumMessagesReceived;
+            numMessagesSent = MqttClientStatistics.TotalNumMessagesSent;
+            numRetainedMessages = _retainedMessagesManager.GetMessageCount();
+        }
+
         public bool IsStarted => _cancellationTokenSource != null;
         
         public Task DeleteRetainedMessagesAsync()
         {
             ThrowIfNotStarted();
 
-            return _retainedMessagesManager?.ClearMessages() ?? PlatformAbstractionLayer.CompletedTask;
+            return _retainedMessagesManager?.ClearMessagesAsync() ?? PlatformAbstractionLayer.CompletedTask;
         }
 
         public Task DisconnectClientAsync(string id, MqttDisconnectReasonCode reasonCode)
@@ -189,7 +288,7 @@ namespace MQTTnet.Server
         {
             ThrowIfNotStarted();
 
-            return _retainedMessagesManager.GetMessages();
+            return _retainedMessagesManager.GetMessagesAsync();
         }
 
         public Task<IList<MqttSessionStatus>> GetSessionsAsync()
@@ -225,7 +324,8 @@ namespace MQTTnet.Server
             _cancellationTokenSource = new CancellationTokenSource();
             var cancellationToken = _cancellationTokenSource.Token;
 
-            await _retainedMessagesManager.Start().ConfigureAwait(false);
+            await _retainedMessagesManager.LoadMessagesAsync().ConfigureAwait(false);
+
             _clientSessionsManager.Start();
             _keepAliveMonitor.Start(cancellationToken);
 
@@ -321,7 +421,7 @@ namespace MQTTnet.Server
             ThrowIfDisposed();
             ThrowIfNotStarted();
 
-            return _retainedMessagesManager?.UpdateMessage(null, retainedMessage);
+            return _retainedMessagesManager?.UpdateMessageAsync(null, retainedMessage);
         }
 
         protected override void Dispose(bool disposing)

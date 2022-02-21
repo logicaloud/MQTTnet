@@ -130,11 +130,21 @@ namespace MQTTnet.Server
             {
                 var willPublishPacket = _packetFactories.Publish.Create(Session.LatestConnectPacket);
                 var willApplicationMessage = _applicationMessageFactory.Create(willPublishPacket);
-                
-                _= _sessionsManager.DispatchApplicationMessage(Id, willApplicationMessage);
-                Session.WillMessageSent = true;
-                
-                _logger.Info("Client '{0}': Published will message.", Id);
+
+                if (Session.WillDelayInterval > 0)
+                {
+                    _sessionsManager.ScheduleWillMessage(Id, willApplicationMessage, Session.WillDelayInterval);
+
+                    _logger.Info("Client '{0}': Delayed will message.", Id);
+                }
+                else
+                {
+                    _ = _sessionsManager.DispatchApplicationMessage(Id, willApplicationMessage);
+
+                    _logger.Info("Client '{0}': Published will message.", Id);
+                }
+
+                Session.WillMessageSent = true;                
             }
 
             _logger.Info("Client '{0}': Connection stopped.", Id);
@@ -226,11 +236,11 @@ namespace MQTTnet.Server
                     }
                     else if (packet is MqttPubAckPacket pubAckPacket)
                     {
-                        Session.AcknowledgePublishPacket(pubAckPacket.PacketIdentifier);
+                        await Session.AcknowledgePublishPacketAsync(pubAckPacket.PacketIdentifier);
                     }
                     else if (packet is MqttPubCompPacket pubCompPacket)
                     {
-                        Session.AcknowledgePublishPacket(pubCompPacket.PacketIdentifier);
+                        await Session.AcknowledgePublishPacketAsync(pubCompPacket.PacketIdentifier);
                     }
                     else if (packet is MqttPubRecPacket pubRecPacket)
                     {
@@ -260,7 +270,7 @@ namespace MQTTnet.Server
                     }
                     else if (packet is MqttDisconnectPacket)
                     {
-                        IsCleanDisconnect = true;
+                        HandleIncomingDisconnectPacket(packet as MqttDisconnectPacket);
                         return;
                     }
                     else
@@ -302,6 +312,25 @@ namespace MQTTnet.Server
                     if (cancellationToken.IsCancellationRequested)
                     {
                         return;
+                    }
+
+                    if (packetBusItem.Packet is MqttPublishPacket publishPacket)
+                    {
+                        if (publishPacket.MessageExpiryTimestamp != null)
+                        {
+                            var now = DateTime.UtcNow;
+                            if (publishPacket.MessageExpiryTimestamp <= now)
+                            {
+                                // Message has expired, ignore
+                                continue;
+                            }
+                            else
+                            {
+                                // The PUBLISH packet sent to a Client by the Server MUST contain a Message Expiry Interval set to the
+                                // received value minus the time that the Application Message has been waiting in the Server [MQTT-3.3.2-6]. 
+                                publishPacket.MessageExpiryInterval = (uint)((publishPacket.MessageExpiryTimestamp.Value - now).TotalSeconds + 0.5);
+                            }
+                        }
                     }
 
                     try
@@ -483,6 +512,39 @@ namespace MQTTnet.Server
                 {
                     throw new MqttCommunicationException("Received a not supported QoS level.");
                 }
+            }
+        }
+
+        void HandleIncomingDisconnectPacket(MqttDisconnectPacket disconnectPacket)
+        {
+            /* MQTT 5
+             * If the Session Expiry Interval is absent, the Session Expiry Interval in the CONNECT packet is used.
+             * The Session Expiry Interval MUST NOT be sent on a DISCONNECT by the Server [MQTT-3.14.2-2].
+             * If the Session Expiry Interval in the CONNECT packet was zero, then it is a Protocol Error to set a non-zero Session Expiry Interval 
+             * in the DISCONNECT packet sent by the Client. If such a non-zero Session Expiry Interval is received by the Server, it does not treat it 
+             * as a valid DISCONNECT packet. The Server uses DISCONNECT with Reason Code 0x82 (Protocol Error) as described in section 4.13.
+             */
+            var sessionExpiryInterval = disconnectPacket.SessionExpiryInterval;
+            if ((Session.SessionExpiryInterval == 0) && (sessionExpiryInterval != 0))
+            {
+                // protocol error Reason Code 0x82 (Protocol Error)
+                // TODO: review
+                IsCleanDisconnect = false;
+            }
+            else
+            {
+                if (sessionExpiryInterval != 0)
+                {
+                    // Update session expiry
+                    Session.SessionExpiryInterval = sessionExpiryInterval;
+                }
+                /* MQTT 5 TODO
+                 * Refer to section 3.1.3.2 for information about the Will Delay Interval.
+                 * Non-normative comment
+                 * The Client can arrange for the Will Message to notify that Session Expiry has occurred by setting the Will Delay Interval to be 
+                 * longer than the Session Expiry Interval and sending DISCONNECT with Reason Code 0x04 (Disconnect with Will Message).
+                 */
+                IsCleanDisconnect = true;
             }
         }
 

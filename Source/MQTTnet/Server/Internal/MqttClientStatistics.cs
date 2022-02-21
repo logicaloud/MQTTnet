@@ -19,6 +19,9 @@ namespace MQTTnet.Server
         long _receivedApplicationMessagesCount;
         long _sentApplicationMessagesCount;
 
+        static long _totalNumMessagesReceived;
+        static long _totalNumMessagesSent;
+
         public MqttClientStatistics()
         {
             ConnectedTimestamp = DateTime.UtcNow;
@@ -28,7 +31,11 @@ namespace MQTTnet.Server
 
             LastNonKeepAlivePacketReceivedTimestamp = ConnectedTimestamp;
         }
-        
+
+        public static long TotalNumMessagesReceived => Interlocked.Read(ref _totalNumMessagesReceived);
+
+        public static long TotalNumMessagesSent => Interlocked.Read(ref _totalNumMessagesSent);
+
         public DateTime ConnectedTimestamp { get; }
 
         /// <summary>
@@ -66,6 +73,7 @@ namespace MQTTnet.Server
             if (packet is MqttPublishPacket)
             {
                 Interlocked.Increment(ref _sentApplicationMessagesCount);
+                Interlocked.Increment(ref _totalNumMessagesReceived);
             }
 
             if (!(packet is MqttPingReqPacket || packet is MqttPingRespPacket))
@@ -89,6 +97,7 @@ namespace MQTTnet.Server
             if (packet is MqttPublishPacket)
             {
                 Interlocked.Increment(ref _receivedApplicationMessagesCount);
+                Interlocked.Increment(ref _totalNumMessagesSent);
             }
         }
     }

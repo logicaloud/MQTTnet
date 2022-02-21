@@ -119,13 +119,14 @@ namespace MQTTnet.Tests.Server
         {
             var logger = new TestLogger();
             var options = new MqttServerOptions();
-            var retainedMessagesManager = new MqttRetainedMessagesManager(new MqttServerEventContainer(), logger);
             var eventContainer = new MqttServerEventContainer();
-            var clientSessionManager = new MqttClientSessionsManager(options, retainedMessagesManager, eventContainer, logger);
+            var retainedMessagesManager = new MqttRetainedMessagesManager(new MqttServerEventContainer(), logger);
+            var persistedSessionManager = new MqttPersistedSessionManager(eventContainer, logger);
+            var clientSessionManager = new MqttClientSessionsManager(options, retainedMessagesManager, persistedSessionManager, eventContainer, logger);
 
-            var session = new MqttSession("", false, new ConcurrentDictionary<object, object>(), options, eventContainer, retainedMessagesManager, clientSessionManager);
+            var session = new MqttSession("", false, 0, 0, new ConcurrentDictionary<object, object>(), options, eventContainer, retainedMessagesManager, persistedSessionManager, clientSessionManager);
 
-            _subscriptionsManager = new MqttClientSubscriptionsManager(session, new MqttServerEventContainer(), retainedMessagesManager, clientSessionManager);
+            _subscriptionsManager = new MqttClientSubscriptionsManager(session, new MqttServerEventContainer(), retainedMessagesManager, persistedSessionManager, clientSessionManager);
         }
 
         CheckSubscriptionsResult CheckSubscriptions(string topic, MqttQualityOfServiceLevel applicationMessageQoSLevel, string senderClientId)

@@ -29,23 +29,28 @@ namespace MQTTnet.Server
             _logger = logger.WithSource(nameof(MqttRetainedMessagesManager));
         }
         
-        public async Task Start()
+        public int GetMessageCount()
+        {
+            lock (_messages)
+            {
+                return _messages.Count();
+            }
+        }
+
+        public async Task LoadMessagesAsync()
         {
             try
             {
                 var eventArgs = new LoadingRetainedMessagesEventArgs();
                 await _eventContainer.LoadingRetainedMessagesEvent.InvokeAsync(eventArgs).ConfigureAwait(false);
-                
+
                 lock (_messages)
                 {
                     _messages.Clear();
 
-                    if (eventArgs.LoadedRetainedMessages != null)
+                    foreach (var retainedMessage in eventArgs.LoadedRetainedMessages ?? new List<MqttApplicationMessage>())
                     {
-                        foreach (var retainedMessage in eventArgs.LoadedRetainedMessages)
-                        {
-                            _messages[retainedMessage.Topic] = retainedMessage;
-                        }
+                        _messages[retainedMessage.Topic] = retainedMessage;
                     }
                 }
             }
@@ -55,7 +60,8 @@ namespace MQTTnet.Server
             }
         }
 
-        public async Task UpdateMessage(string clientId, MqttApplicationMessage applicationMessage)
+
+        public async Task UpdateMessageAsync(string clientId, MqttApplicationMessage applicationMessage)
         {
             if (applicationMessage == null)
             {
@@ -64,16 +70,18 @@ namespace MQTTnet.Server
 
             try
             {
-                List<MqttApplicationMessage> messagesForSave = null;
-                var saveIsRequired = false;
-                
+                RetainedMessageChangedEventArgs.RetainedMessageChangeType? changeType = null;
+
                 lock (_messages)
                 {
                     var hasPayload = applicationMessage.Payload != null && applicationMessage.Payload.Length > 0;
 
                     if (!hasPayload)
                     {
-                        saveIsRequired = _messages.Remove(applicationMessage.Topic);
+                        if (_messages.Remove(applicationMessage.Topic))
+                        {
+                            changeType = RetainedMessageChangedEventArgs.RetainedMessageChangeType.Remove;
+                        }
                         _logger.Verbose("Client '{0}' cleared retained message for topic '{1}'.", clientId, applicationMessage.Topic);
                     }
                     else
@@ -81,37 +89,27 @@ namespace MQTTnet.Server
                         if (!_messages.TryGetValue(applicationMessage.Topic, out var existingMessage))
                         {
                             _messages[applicationMessage.Topic] = applicationMessage;
-                            saveIsRequired = true;
+                            changeType = RetainedMessageChangedEventArgs.RetainedMessageChangeType.Add;
                         }
                         else
                         {
                             if (existingMessage.QualityOfServiceLevel != applicationMessage.QualityOfServiceLevel || !existingMessage.Payload.SequenceEqual(applicationMessage.Payload ?? PlatformAbstractionLayer.EmptyByteArray))
                             {
                                 _messages[applicationMessage.Topic] = applicationMessage;
-                                saveIsRequired = true;
+                                changeType = RetainedMessageChangedEventArgs.RetainedMessageChangeType.Replace;
                             }
                         }
 
                         _logger.Verbose("Client '{0}' set retained message for topic '{1}'.", clientId, applicationMessage.Topic);
                     }
-
-                    if (saveIsRequired)
-                    {
-                        messagesForSave = new List<MqttApplicationMessage>(_messages.Values);
-                    }
                 }
 
-                if (saveIsRequired)
+                if (changeType != null)
                 {
                     using (await _storageAccessLock.WaitAsync(CancellationToken.None).ConfigureAwait(false))
                     {
-                        var eventArgs = new RetainedMessageChangedEventArgs
-                        {
-                            ClientId = clientId,
-                            ChangedRetainedMessage = applicationMessage,
-                            StoredRetainedMessages = messagesForSave
-                        };
-                        
+                        var eventArgs = new RetainedMessageChangedEventArgs(clientId, changeType.Value, applicationMessage);
+
                         await _eventContainer.RetainedMessageChangedEvent.InvokeAsync(eventArgs).ConfigureAwait(false);
                     }
                 }
@@ -121,8 +119,33 @@ namespace MQTTnet.Server
                 _logger.Error(exception, "Unhandled exception while handling retained messages.");
             }
         }
-        
-        public Task<IList<MqttApplicationMessage>> GetMessages()
+
+        public async Task RemoveMessageAsync(string topic)
+        {
+            try
+            {
+                bool saveIsRequired;
+                lock (_messages)
+                {
+                    saveIsRequired = _messages.Remove(topic);
+                }
+
+                if (saveIsRequired)
+                {
+                    using (await _storageAccessLock.WaitAsync(CancellationToken.None).ConfigureAwait(false))
+                    {
+                        var eventArgs = new RetainedMessageRemovedEventArgs(topic);
+                        await _eventContainer.RetainedMessageRemovedEvent.InvokeAsync(eventArgs).ConfigureAwait(false);
+                    }
+                }
+            }
+            catch (Exception exception)
+            {
+                _logger.Error(exception, "Unhandled exception while removing retained message.");
+            }
+        }
+
+        public Task<IList<MqttApplicationMessage>> GetMessagesAsync()
         {
             lock (_messages)
             {
@@ -131,7 +154,7 @@ namespace MQTTnet.Server
             }
         }
 
-        public async Task ClearMessages()
+        public async Task ClearMessagesAsync()
         {
             lock (_messages)
             {

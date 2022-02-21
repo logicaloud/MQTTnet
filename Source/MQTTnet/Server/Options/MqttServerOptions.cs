@@ -14,6 +14,8 @@ namespace MQTTnet.Server
 
         public bool EnablePersistentSessions { get; set; }
 
+        public bool EnablePersistentSessionStorage { get; set; }
+
         public TimeSpan KeepAliveMonitorInterval { get; set; } = TimeSpan.FromMilliseconds(500);
 
         public int MaxPendingMessagesPerClient { get; set; } = 250;

@@ -18,6 +18,7 @@ namespace MQTTnet.Server
     public sealed class MqttSession : IDisposable
     {
         readonly MqttClientSessionsManager _clientSessionsManager;
+        readonly MqttPersistedSessionManager _persistedSessionManager;
         readonly MqttPacketBus _packetBus = new MqttPacketBus();
 
         readonly MqttServerOptions _serverOptions;
@@ -30,20 +31,26 @@ namespace MQTTnet.Server
         public MqttSession(
             string clientId,
             bool isPersistent,
+            uint sessionExpiryInterval, // only valid for MQTT5 clients
+            uint willDelayInterval, // only valid for MQTT 5 clients
             IDictionary items,
             MqttServerOptions serverOptions,
             MqttServerEventContainer eventContainer,
             MqttRetainedMessagesManager retainedMessagesManager,
+            MqttPersistedSessionManager persistedSessionManager,
             MqttClientSessionsManager clientSessionsManager)
         {
             Id = clientId ?? throw new ArgumentNullException(nameof(clientId));
             IsPersistent = isPersistent;
+            SessionExpiryInterval = sessionExpiryInterval;
+            WillDelayInterval = willDelayInterval;
             Items = items ?? throw new ArgumentNullException(nameof(items));
 
             _serverOptions = serverOptions ?? throw new ArgumentNullException(nameof(serverOptions));
             _clientSessionsManager = clientSessionsManager ?? throw new ArgumentNullException(nameof(clientSessionsManager));
+            _persistedSessionManager = persistedSessionManager ?? throw new ArgumentNullException(nameof(_persistedSessionManager));
 
-            SubscriptionsManager = new MqttClientSubscriptionsManager(this, eventContainer, retainedMessagesManager, clientSessionsManager);
+            SubscriptionsManager = new MqttClientSubscriptionsManager(this, eventContainer, retainedMessagesManager, persistedSessionManager, clientSessionsManager);
         }
 
         public DateTime CreatedTimestamp { get; } = DateTime.UtcNow;
@@ -57,6 +64,8 @@ namespace MQTTnet.Server
         /// </summary>
         public bool IsPersistent { get; set; }
 
+        public uint SessionExpiryInterval { get; set; }
+
         public IDictionary Items { get; }
 
         public MqttConnectPacket LatestConnectPacket { get; set; }
@@ -69,9 +78,22 @@ namespace MQTTnet.Server
 
         public bool WillMessageSent { get; set; }
 
-        public void AcknowledgePublishPacket(ushort packetIdentifier)
+        public uint WillDelayInterval { get; set; }
+
+        public bool PersistedMessagesAreRestored { get; set; }
+
+        public Task AcknowledgePublishPacketAsync(ushort packetIdentifier)
         {
-            _unacknowledgedPublishPackets.Remove(packetIdentifier);
+            if (_unacknowledgedPublishPackets.TryGetValue(packetIdentifier, out var publishPacket))
+            {
+                _unacknowledgedPublishPackets.Remove(packetIdentifier);
+
+                if ((publishPacket.PersistedMessageKey != null) && _persistedSessionManager.IsWritable)
+                {
+                    return _persistedSessionManager.RemoveMessageAsync(publishPacket.PersistedMessageKey);
+                }
+            }
+            return Implementations.PlatformAbstractionLayer.CompletedTask;
         }
 
         public void AddSubscribedTopic(string topic)
@@ -127,6 +149,7 @@ namespace MQTTnet.Server
                 if (publishPacket.QualityOfServiceLevel > MqttQualityOfServiceLevel.AtMostOnce)
                 {
                     _unacknowledgedPublishPackets[publishPacket.PacketIdentifier] = publishPacket;
+                    // NOTE: For clients with persisted sessions, messages are stored or restored by the caller
                 }
 
                 _packetBus.EnqueueItem(packetBusItem, MqttPacketBusPartition.Data);

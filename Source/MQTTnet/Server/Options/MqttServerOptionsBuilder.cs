@@ -192,7 +192,13 @@ namespace MQTTnet.Server
             _options.EnablePersistentSessions = value;
             return this;
         }
-        
+
+        public MqttServerOptionsBuilder WithPersistentSessionStorage(bool value = true)
+        {
+            _options.EnablePersistentSessionStorage = value;
+            return this;
+        }
+
         // /// <summary>
         // /// Gets or sets the client ID which is used when publishing messages from the server directly.
         // /// </summary>

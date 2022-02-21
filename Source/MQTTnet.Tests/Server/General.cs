@@ -399,7 +399,7 @@ namespace MQTTnet.Tests.Server
                 var s = await testEnvironment.StartServer();
                 s.RetainedMessageChangedAsync += e =>
                 {
-                    savedRetainedMessages = e.StoredRetainedMessages;
+                    savedRetainedMessages = s.GetRetainedMessagesAsync().GetAwaiter().GetResult().ToList();
                     return PlatformAbstractionLayer.CompletedTask;
                 };
 
