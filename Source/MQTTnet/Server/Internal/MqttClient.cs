@@ -103,24 +103,24 @@ namespace MQTTnet.Server
             Session.LatestConnectPacket = _connectPacket;
             Session.WillMessageSent = false;
 
-            using (var cancellationToken = new CancellationTokenSource())
+            using (_cancellationToken = new CancellationTokenSource())
             {
-                _cancellationToken = cancellationToken;
+                var cancellationToken = _cancellationToken.Token;
 
                 try
                 {
-                    Task.Run(() => SendPacketsLoop(cancellationToken.Token), cancellationToken.Token).RunInBackground(_logger);
+                    Task.Run(() => SendPacketsLoop(cancellationToken), cancellationToken).RunInBackground(_logger);
                     
                     IsRunning = true;
 
-                    await ReceivePackagesLoop(cancellationToken.Token).ConfigureAwait(false);
+                    await ReceivePackagesLoop(cancellationToken).ConfigureAwait(false);
                 }
                 finally
                 {
                     IsRunning = false;
 
+                    _cancellationToken?.Cancel();
                     _cancellationToken = null;
-                    cancellationToken.Cancel();
                 }
             }
 
@@ -199,7 +199,6 @@ namespace MQTTnet.Server
                 while (!cancellationToken.IsCancellationRequested)
                 {
                     var packet = await ChannelAdapter.ReceivePacketAsync(cancellationToken).ConfigureAwait(false);
-
                     if (packet == null)
                     {
                         return;
@@ -261,8 +260,7 @@ namespace MQTTnet.Server
                     else if (packet is MqttPingReqPacket)
                     {
                         // See: The Server MUST send a PINGRESP packet in response to a PINGREQ packet [MQTT-3.12.4-1].
-                        //await SendPacketAsync(MqttPingRespPacket.Instance, cancellationToken).ConfigureAwait(false);
-                        Session.EnqueuePacket(new MqttPacketBusItem(MqttPingRespPacket.Instance));
+                        Session.EnqueueHealthPacket(new MqttPacketBusItem(MqttPingRespPacket.Instance));
                     }
                     else if (packet is MqttPingRespPacket)
                     {
@@ -371,7 +369,7 @@ namespace MQTTnet.Server
                     if (publishPacket.QualityOfServiceLevel > MqttQualityOfServiceLevel.AtMostOnce)
                     {
                         publishPacket.Dup = true;
-                        Session.EnqueuePacket(new MqttPacketBusItem(publishPacket));
+                        Session.EnqueueDataPacket(new MqttPacketBusItem(publishPacket));
                     }
                 }
 
@@ -395,13 +393,13 @@ namespace MQTTnet.Server
         void HandleIncomingPubRecPacket(MqttPubRecPacket pubRecPacket)
         {
             var pubRelPacket = _packetFactories.PubRel.Create(pubRecPacket, MqttApplicationMessageReceivedReasonCode.Success);
-            Session.EnqueuePacket(new MqttPacketBusItem(pubRelPacket));
+            Session.EnqueueControlPacket(new MqttPacketBusItem(pubRelPacket));
         }
 
         void HandleIncomingPubRelPacket(MqttPubRelPacket pubRelPacket)
         {
             var pubCompPacket = _packetFactories.PubComp.Create(pubRelPacket, MqttApplicationMessageReceivedReasonCode.Success);
-            Session.EnqueuePacket(new MqttPacketBusItem(pubCompPacket));
+            Session.EnqueueControlPacket(new MqttPacketBusItem(pubCompPacket));
         }
 
         async Task HandleIncomingSubscribePacket(MqttSubscribePacket subscribePacket, CancellationToken cancellationToken)
@@ -410,7 +408,7 @@ namespace MQTTnet.Server
 
             var subAckPacket = _packetFactories.SubAck.Create(subscribePacket, subscribeResult);
 
-            Session.EnqueuePacket(new MqttPacketBusItem(subAckPacket));
+            Session.EnqueueControlPacket(new MqttPacketBusItem(subAckPacket));
 
             if (subscribeResult.CloseConnection)
             {
@@ -423,7 +421,7 @@ namespace MQTTnet.Server
                 foreach (var retainedApplicationMessage in subscribeResult.RetainedMessages)
                 {
                     var publishPacket = _packetFactories.Publish.Create(retainedApplicationMessage.ApplicationMessage);
-                    Session.EnqueuePacket(new MqttPacketBusItem(publishPacket));
+                    Session.EnqueueControlPacket(new MqttPacketBusItem(publishPacket));
                 }
             }
         }
@@ -434,7 +432,7 @@ namespace MQTTnet.Server
 
             var unsubAckPacket = _packetFactories.UnsubAck.Create(unsubscribePacket, unsubscribeResult);
 
-            Session.EnqueuePacket(new MqttPacketBusItem(unsubAckPacket));
+            Session.EnqueueControlPacket(new MqttPacketBusItem(unsubAckPacket));
 
             if (unsubscribeResult.CloseConnection)
             {
@@ -499,13 +497,13 @@ namespace MQTTnet.Server
                 case MqttQualityOfServiceLevel.AtLeastOnce:
                 {
                     var pubAckPacket = _packetFactories.PubAck.Create(publishPacket, interceptingPublishEventArgs);
-                    Session.EnqueuePacket(new MqttPacketBusItem(pubAckPacket));
+                    Session.EnqueueControlPacket(new MqttPacketBusItem(pubAckPacket));
                     break;
                 }
                 case MqttQualityOfServiceLevel.ExactlyOnce:
                 {
                     var pubRecPacket = _packetFactories.PubRec.Create(publishPacket, interceptingPublishEventArgs);
-                    Session.EnqueuePacket(new MqttPacketBusItem(pubRecPacket));
+                    Session.EnqueueControlPacket(new MqttPacketBusItem(pubRecPacket));
                     break;
                 }
                 default:

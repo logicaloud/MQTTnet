@@ -25,7 +25,7 @@ namespace MQTTnet.Server
 
         readonly Dictionary<ushort, MqttPublishPacket> _unacknowledgedPublishPackets = new Dictionary<ushort, MqttPublishPacket>();
 
-        // Bookkeeping to know if this is a subscribing client; lazy intialize later.
+        // Bookkeeping to know if this is a subscribing client; lazy initialize later.
         HashSet<string> _subscribedTopics;
 
         public MqttSession(
@@ -122,14 +122,9 @@ namespace MQTTnet.Server
             SubscriptionsManager.Dispose();
         }
 
-        public void EnqueuePacket(MqttPacketBusItem packetBusItem)
+        public void EnqueueDataPacket(MqttPacketBusItem packetBusItem)
         {
-            if (packetBusItem == null)
-            {
-                throw new ArgumentNullException(nameof(packetBusItem));
-            }
-
-            if (_packetBus.ItemsCount >= _serverOptions.MaxPendingMessagesPerClient)
+            if (_packetBus.ItemsCount(MqttPacketBusPartition.Data) >= _serverOptions.MaxPendingMessagesPerClient)
             {
                 if (_serverOptions.PendingMessagesOverflowStrategy == MqttPendingMessagesOverflowStrategy.DropNewMessage)
                 {
@@ -144,26 +139,26 @@ namespace MQTTnet.Server
                 }
             }
 
-            if (packetBusItem.Packet is MqttPublishPacket publishPacket)
+            var publishPacket = (MqttPublishPacket)packetBusItem.Packet;
+            if (publishPacket.QualityOfServiceLevel > MqttQualityOfServiceLevel.AtMostOnce)
             {
-                if (publishPacket.QualityOfServiceLevel > MqttQualityOfServiceLevel.AtMostOnce)
-                {
-                    _unacknowledgedPublishPackets[publishPacket.PacketIdentifier] = publishPacket;
-                    // NOTE: For clients with persisted sessions, messages are stored or restored by the caller
-                }
+                _unacknowledgedPublishPackets[publishPacket.PacketIdentifier] = publishPacket;
+                // NOTE: For clients with persisted sessions, messages are stored or restored by the caller
+            }
 
-                _packetBus.EnqueueItem(packetBusItem, MqttPacketBusPartition.Data);
-            }
-            else if (packetBusItem.Packet is MqttPingReqPacket || packetBusItem.Packet is MqttPingRespPacket)
-            {
-                _packetBus.EnqueueItem(packetBusItem, MqttPacketBusPartition.Health);
-            }
-            else
-            {
-                _packetBus.EnqueueItem(packetBusItem, MqttPacketBusPartition.Control);
-            }
+            _packetBus.EnqueueItem(packetBusItem, MqttPacketBusPartition.Data);
         }
 
+        public void EnqueueControlPacket(MqttPacketBusItem packetBusItem)
+        {
+            _packetBus.EnqueueItem(packetBusItem, MqttPacketBusPartition.Control);
+        }
+
+        public void EnqueueHealthPacket(MqttPacketBusItem packetBusItem)
+        {
+            _packetBus.EnqueueItem(packetBusItem, MqttPacketBusPartition.Health);
+        }
+        
         public void Recover()
         {
             // TODO: Keep the bus and only insert pending items again.
@@ -172,7 +167,7 @@ namespace MQTTnet.Server
 
             foreach (var publishPacket in _unacknowledgedPublishPackets.Values.ToList())
             {
-                EnqueuePacket(new MqttPacketBusItem(publishPacket));
+                EnqueueDataPacket(new MqttPacketBusItem(publishPacket));
             }
         }
 

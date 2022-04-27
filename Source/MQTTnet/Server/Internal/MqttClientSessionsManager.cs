@@ -277,7 +277,8 @@ namespace MQTTnet.Server
                     // Review: there is currently nothing that removes an expired message from the queue.
                     // The message is simply skipped when packets are processed.
 
-                    session.EnqueuePacket(new MqttPacketBusItem(newPublishPacket));
+                    session.EnqueueDataPacket(new MqttPacketBusItem(newPublishPacket));
+
                     deliveryCount++;
 
                     _logger.Verbose("Client '{0}': Queued PUBLISH packet with topic '{1}'.", session.Id, applicationMessage.Topic);
@@ -347,7 +348,7 @@ namespace MQTTnet.Server
             }
         }
 
-        public Task<IList<MqttClientStatus>> GetClientStatusAsync()
+        public Task<IList<MqttClientStatus>> GetClientStatusesAsync()
         {
             var result = new List<MqttClientStatus>();
 
@@ -568,7 +569,8 @@ namespace MQTTnet.Server
                         publishPacket.Retain = false;
                     }
                     // TODO, REVIEW. Quality of service level irrelevant. If > AtMostOnce then we need a packet identifier
-                    publishPacket.QualityOfServiceLevel = MqttQualityOfServiceLevel.AtMostOnce; clientSession.EnqueuePacket(new MqttPacketBusItem(publishPacket));
+                    publishPacket.QualityOfServiceLevel = MqttQualityOfServiceLevel.AtMostOnce;
+                    clientSession.EnqueueDataPacket(new MqttPacketBusItem(publishPacket));
                 }
             }
         }
@@ -743,7 +745,7 @@ namespace MQTTnet.Server
                             }
                             publishPacket.PacketIdentifier = session.PacketIdentifierProvider.GetNextPacketIdentifier();
                             publishPacket.PersistedMessageKey = message.PersistedMessageKey;
-                            session.EnqueuePacket(new MqttPacketBusItem(publishPacket));
+                            session.EnqueueDataPacket(new MqttPacketBusItem(publishPacket));
                         }
                         // Set flag to indicate that messages are now tracked in memory with the persisted session manager kept in sync.
                         // If client disconnects and reconnects while server is running then loading of session messages from storage is not required.

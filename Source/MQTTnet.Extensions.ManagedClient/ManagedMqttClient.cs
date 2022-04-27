@@ -14,16 +14,17 @@ using MQTTnet.Internal;
 using MQTTnet.Packets;
 using MQTTnet.Protocol;
 using MQTTnet.Server;
-using MqttClient = MQTTnet.Client.MqttClient;
 
 namespace MQTTnet.Extensions.ManagedClient
 {
-    public sealed class ManagedMqttClient : Disposable
+    public sealed class ManagedMqttClient : Disposable, IManagedMqttClient
     {
         readonly AsyncEvent<ApplicationMessageProcessedEventArgs> _applicationMessageProcessedEvent = new AsyncEvent<ApplicationMessageProcessedEventArgs>();
+        readonly AsyncEvent<ApplicationMessageSkippedEventArgs> _applicationMessageSkippedEvent = new AsyncEvent<ApplicationMessageSkippedEventArgs>();
         readonly AsyncEvent<ConnectingFailedEventArgs> _connectingFailedEvent = new AsyncEvent<ConnectingFailedEventArgs>();
         readonly AsyncEvent<EventArgs> _connectionStateChangedEvent = new AsyncEvent<EventArgs>();
-
+        readonly AsyncEvent<ManagedProcessFailedEventArgs> _synchronizingSubscriptionsFailedEvent = new AsyncEvent<ManagedProcessFailedEventArgs>();
+        
         readonly MqttNetSourceLogger _logger;
         readonly BlockingQueue<ManagedMqttApplicationMessage> _messageQueue = new BlockingQueue<ManagedMqttApplicationMessage>();
 
@@ -62,7 +63,7 @@ namespace MQTTnet.Extensions.ManagedClient
 
         ManagedMqttClientStorageManager _storageManager;
 
-        public ManagedMqttClient(MqttClient mqttClient, IMqttNetLogger logger)
+        public ManagedMqttClient(IMqttClient mqttClient, IMqttNetLogger logger)
         {
             InternalClient = mqttClient ?? throw new ArgumentNullException(nameof(mqttClient));
 
@@ -74,6 +75,12 @@ namespace MQTTnet.Extensions.ManagedClient
             _logger = logger.WithSource(nameof(ManagedMqttClient));
         }
 
+        public event Func<ApplicationMessageSkippedEventArgs, Task> ApplicationMessageSkippedAsync
+        {
+            add => _applicationMessageSkippedEvent.AddHandler(value);
+            remove => _applicationMessageSkippedEvent.RemoveHandler(value);
+        }
+        
         public event Func<ApplicationMessageProcessedEventArgs, Task> ApplicationMessageProcessedAsync
         {
             add => _applicationMessageProcessedEvent.AddHandler(value);
@@ -110,9 +117,13 @@ namespace MQTTnet.Extensions.ManagedClient
             remove => InternalClient.DisconnectedAsync -= value;
         }
 
-        public IApplicationMessageSkippedHandler ApplicationMessageSkippedHandler { get; set; }
+        public event Func<ManagedProcessFailedEventArgs, Task> SynchronizingSubscriptionsFailedAsync
+        {
+            add => _synchronizingSubscriptionsFailedEvent.AddHandler(value);
+            remove => _synchronizingSubscriptionsFailedEvent.RemoveHandler(value);
+        }
 
-        public MqttClient InternalClient { get; }
+        public IMqttClient InternalClient { get; }
 
         public bool IsConnected => InternalClient.IsConnected;
 
@@ -121,9 +132,7 @@ namespace MQTTnet.Extensions.ManagedClient
         public ManagedMqttClientOptions Options { get; private set; }
 
         public int PendingApplicationMessagesCount => _messageQueue.Count;
-
-        public ISynchronizingSubscriptionsFailedHandler SynchronizingSubscriptionsFailedHandler { get; set; }
-
+        
         public async Task EnqueueAsync(MqttApplicationMessage applicationMessage)
         {
             ThrowIfDisposed();
@@ -192,18 +201,14 @@ namespace MQTTnet.Extensions.ManagedClient
             }
             finally
             {
-                if (applicationMessageSkippedEventArgs != null)
+                if (_applicationMessageSkippedEvent.HasHandlers)
                 {
-                    var applicationMessageSkippedHandler = ApplicationMessageSkippedHandler;
-                    if (applicationMessageSkippedHandler != null)
-                    {
-                        await applicationMessageSkippedHandler.HandleApplicationMessageSkippedAsync(applicationMessageSkippedEventArgs).ConfigureAwait(false);
-                    }
+                    await _applicationMessageSkippedEvent.InvokeAsync(applicationMessageSkippedEventArgs).ConfigureAwait(false);
                 }
             }
         }
 
-        public Task PingAsync(CancellationToken cancellationToken)
+        public Task PingAsync(CancellationToken cancellationToken = default)
         {
             return InternalClient.PingAsync(cancellationToken);
         }
@@ -349,10 +354,9 @@ namespace MQTTnet.Extensions.ManagedClient
         {
             _logger.Warning(exception, "Synchronizing subscriptions failed.");
 
-            var synchronizingSubscriptionsFailedHandler = SynchronizingSubscriptionsFailedHandler;
-            if (SynchronizingSubscriptionsFailedHandler != null)
+            if (_synchronizingSubscriptionsFailedEvent.HasHandlers)
             {
-                await synchronizingSubscriptionsFailedHandler.HandleSynchronizingSubscriptionsFailedAsync(new ManagedProcessFailedEventArgs(exception)).ConfigureAwait(false);
+                await _synchronizingSubscriptionsFailedEvent.InvokeAsync(new ManagedProcessFailedEventArgs(exception)).ConfigureAwait(false);
             }
         }
 
