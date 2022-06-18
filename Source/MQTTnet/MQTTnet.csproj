@@ -29,7 +29,7 @@
         <PublishRepositoryUrl>true</PublishRepositoryUrl>
         <IncludeSymbols>true</IncludeSymbols>
         <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-        <Copyright>Christian Kratky 2016-2022</Copyright>
+        <Copyright>Copyright (c) .NET Foundation and Contributors</Copyright>
         <PackageProjectUrl>https://github.com/dotnet/MQTTnet</PackageProjectUrl>
         <RepositoryUrl>https://github.com/dotnet/MQTTnet.git</RepositoryUrl>
         <RepositoryType>git</RepositoryType>
@@ -40,7 +40,7 @@
         <PackageIcon>nuget.png</PackageIcon>
         <EmbedUntrackedSources>true</EmbedUntrackedSources>
         <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
-        <PackageLicenseFile>LICENSE</PackageLicenseFile>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
         <DisableImplicitAspNetCoreAnalyzers>true</DisableImplicitAspNetCoreAnalyzers>
         <NoWarn>1591</NoWarn>
     </PropertyGroup>
@@ -70,13 +70,6 @@
 
     <ItemGroup>
         <None Include="..\..\Images\nuget.png">
-            <Pack>True</Pack>
-            <PackagePath>\</PackagePath>
-        </None>
-    </ItemGroup>
-
-    <ItemGroup>
-        <None Include="..\..\LICENSE">
             <Pack>True</Pack>
             <PackagePath>\</PackagePath>
         </None>

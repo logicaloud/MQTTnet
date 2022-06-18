@@ -20,6 +20,7 @@ namespace MQTTnet.Server
         readonly MqttClientSessionsManager _clientSessionsManager;
         readonly MqttPersistedSessionManager _persistedSessionManager;
         readonly MqttPacketBus _packetBus = new MqttPacketBus();
+        readonly MqttPacketIdentifierProvider _packetIdentifierProvider = new MqttPacketIdentifierProvider();
 
         readonly MqttServerOptions _serverOptions;
 
@@ -122,6 +123,11 @@ namespace MQTTnet.Server
             SubscriptionsManager.Dispose();
         }
 
+        public void EnqueueControlPacket(MqttPacketBusItem packetBusItem)
+        {
+            _packetBus.EnqueueItem(packetBusItem, MqttPacketBusPartition.Control);
+        }
+
         public void EnqueueDataPacket(MqttPacketBusItem packetBusItem)
         {
             if (_packetBus.ItemsCount(MqttPacketBusPartition.Data) >= _serverOptions.MaxPendingMessagesPerClient)
@@ -140,8 +146,11 @@ namespace MQTTnet.Server
             }
 
             var publishPacket = (MqttPublishPacket)packetBusItem.Packet;
+
             if (publishPacket.QualityOfServiceLevel > MqttQualityOfServiceLevel.AtMostOnce)
             {
+                publishPacket.PacketIdentifier = _packetIdentifierProvider.GetNextPacketIdentifier();
+
                 _unacknowledgedPublishPackets[publishPacket.PacketIdentifier] = publishPacket;
                 // NOTE: For clients with persisted sessions, messages are stored or restored by the caller
             }
@@ -149,20 +158,16 @@ namespace MQTTnet.Server
             _packetBus.EnqueueItem(packetBusItem, MqttPacketBusPartition.Data);
         }
 
-        public void EnqueueControlPacket(MqttPacketBusItem packetBusItem)
-        {
-            _packetBus.EnqueueItem(packetBusItem, MqttPacketBusPartition.Control);
-        }
-
         public void EnqueueHealthPacket(MqttPacketBusItem packetBusItem)
         {
             _packetBus.EnqueueItem(packetBusItem, MqttPacketBusPartition.Health);
         }
-        
+
         public void Recover()
         {
             // TODO: Keep the bus and only insert pending items again.
             // TODO: Check if packet identifier must be restarted or not.
+            // TODO: Recover package identifier.
             _packetBus.Clear();
 
             foreach (var publishPacket in _unacknowledgedPublishPackets.Values.ToList())
