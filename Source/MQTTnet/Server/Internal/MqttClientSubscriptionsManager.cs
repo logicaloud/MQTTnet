@@ -183,13 +183,14 @@ namespace MQTTnet.Server
             };
 
             var addedSubscriptions = new List<string>();
+            var finalTopicFilters = new List<MqttTopicFilter>();
 
             // The topic filters are order by its QoS so that the higher QoS will win over a
             // lower one.
-            foreach (var originalTopicFilter in subscribePacket.TopicFilters.OrderByDescending(f => f.QualityOfServiceLevel))
+            foreach (var topicFilterItem in subscribePacket.TopicFilters.OrderByDescending(f => f.QualityOfServiceLevel))
             {
-                var subscriptionEventArgs = await InterceptSubscribe(originalTopicFilter, cancellationToken).ConfigureAwait(false);
-                var finalTopicFilter = subscriptionEventArgs.TopicFilter;
+                var subscriptionEventArgs = await InterceptSubscribe(topicFilterItem, cancellationToken).ConfigureAwait(false);
+                var topicFilter = subscriptionEventArgs.TopicFilter;
                 var processSubscription = subscriptionEventArgs.ProcessSubscription && subscriptionEventArgs.Response.ReasonCode <= MqttSubscribeReasonCode.GrantedQoS2;
 
                 result.UserProperties = subscriptionEventArgs.UserProperties;
@@ -203,7 +204,7 @@ namespace MQTTnet.Server
                     result.CloseConnection = true;
                 }
 
-                if (!processSubscription || string.IsNullOrEmpty(finalTopicFilter.Topic))
+                if (!processSubscription || string.IsNullOrEmpty(topicFilter.Topic))
                 {
                     continue;
                 }
@@ -211,29 +212,30 @@ namespace MQTTnet.Server
                 // persist session if required
                 if (_persistedSessionManager.IsWritable && _session.IsPersistent)
                 {
-                    await _persistedSessionManager.AddOrUpdateSubscriptionAsync(_session.Id, finalTopicFilter).ConfigureAwait(false);
+                    await _persistedSessionManager.AddOrUpdateSubscriptionAsync(_session.Id, topicFilter).ConfigureAwait(false);
                 }
 
-                var createSubscriptionResult = CreateSubscription(finalTopicFilter, subscribePacket.SubscriptionIdentifier, subscriptionEventArgs.Response.ReasonCode);
+                var createSubscriptionResult = CreateSubscription(topicFilter, subscribePacket.SubscriptionIdentifier, subscriptionEventArgs.Response.ReasonCode);
 
-                addedSubscriptions.Add(finalTopicFilter.Topic);
-
-                if (_eventContainer.ClientSubscribedTopicEvent.HasHandlers)
-                {
-                    var eventArgs = new ClientSubscribedTopicEventArgs
-                    {
-                        ClientId = _session.Id,
-                        TopicFilter = finalTopicFilter
-                    };
-
-                    await _eventContainer.ClientSubscribedTopicEvent.InvokeAsync(eventArgs).ConfigureAwait(false);
-                }
+                addedSubscriptions.Add(topicFilter.Topic);
+                finalTopicFilters.Add(topicFilter);
 
                 FilterRetainedApplicationMessages(retainedApplicationMessages, createSubscriptionResult, result);
             }
 
+            // This call will add the new subscription to the internal storage.
+            // So the event _ClientSubscribedTopicEvent_ must be called afterwards.
             _subscriptionChangedNotification?.OnSubscriptionsAdded(_session, addedSubscriptions);
-
+            
+            if (_eventContainer.ClientSubscribedTopicEvent.HasHandlers)
+            {
+                foreach (var finalTopicFilter in finalTopicFilters)
+                {
+                    var eventArgs = new ClientSubscribedTopicEventArgs(_session.Id, finalTopicFilter, _session.Items);
+                    await _eventContainer.ClientSubscribedTopicEvent.InvokeAsync(eventArgs).ConfigureAwait(false);
+                }
+            }
+            
             return result;
         }
 
@@ -282,26 +284,30 @@ namespace MQTTnet.Server
                         _subscriptions.Remove(topicFilter);
 
                         // must remove subscription object from topic hash dictionary also
-
-                        if (existingSubscription.TopicHasWildcard)
+                        if (existingSubscription != null)
                         {
-                            if (_wildcardSubscriptionsByTopicHash.TryGetValue(existingSubscription.TopicHash, out var subs))
+                            var topicHash = existingSubscription.TopicHash;
+                            
+                            if (existingSubscription.TopicHasWildcard)
                             {
-                                subs.Subscriptions.Remove(existingSubscription);
-                                if (subs.Subscriptions.Count == 0)
+                                if (_wildcardSubscriptionsByTopicHash.TryGetValue(topicHash, out var subscriptions))
                                 {
-                                    _wildcardSubscriptionsByTopicHash.Remove(existingSubscription.TopicHash);
+                                    subscriptions.Subscriptions.Remove(existingSubscription);
+                                    if (subscriptions.Subscriptions.Count == 0)
+                                    {
+                                        _wildcardSubscriptionsByTopicHash.Remove(topicHash);
+                                    }
                                 }
                             }
-                        }
-                        else
-                        {
-                            if (_noWildcardSubscriptionsByTopicHash.TryGetValue(existingSubscription.TopicHash, out var subs))
+                            else
                             {
-                                subs.Remove(existingSubscription);
-                                if (subs.Count == 0)
+                                if (_noWildcardSubscriptionsByTopicHash.TryGetValue(topicHash, out var subscriptions))
                                 {
-                                    _noWildcardSubscriptionsByTopicHash.Remove(existingSubscription.TopicHash);
+                                    subscriptions.Remove(existingSubscription);
+                                    if (subscriptions.Count == 0)
+                                    {
+                                        _noWildcardSubscriptionsByTopicHash.Remove(topicHash);
+                                    }
                                 }
                             }
                         }
@@ -318,23 +324,14 @@ namespace MQTTnet.Server
             finally
             {
                 _subscriptionsLock.Release();
-
-                if (_subscriptionChangedNotification != null)
-                {
-                    _subscriptionChangedNotification.OnSubscriptionsRemoved(_session, removedSubscriptions);
-                }
+                _subscriptionChangedNotification?.OnSubscriptionsRemoved(_session, removedSubscriptions);
             }
 
             if (_eventContainer.ClientUnsubscribedTopicEvent.HasHandlers)
             {
                 foreach (var topicFilter in unsubscribePacket.TopicFilters)
                 {
-                    var eventArgs = new ClientUnsubscribedTopicEventArgs
-                    {
-                        ClientId = _session.Id,
-                        TopicFilter = topicFilter
-                    };
-
+                    var eventArgs = new ClientUnsubscribedTopicEventArgs(_session.Id, topicFilter, _session.Items);
                     await _eventContainer.ClientUnsubscribedTopicEvent.InvokeAsync(eventArgs).ConfigureAwait(false);
                 }
             }
@@ -494,14 +491,7 @@ namespace MQTTnet.Server
 
         async Task<InterceptingSubscriptionEventArgs> InterceptSubscribe(MqttTopicFilter topicFilter, CancellationToken cancellationToken)
         {
-            var eventArgs = new InterceptingSubscriptionEventArgs
-            {
-                ClientId = _session.Id,
-                TopicFilter = topicFilter,
-                SessionItems = _session.Items,
-                Session = new MqttSessionStatus(_session),
-                CancellationToken = cancellationToken
-            };
+            var eventArgs = new InterceptingSubscriptionEventArgs(cancellationToken, _session.Id, new MqttSessionStatus(_session), topicFilter);
 
             if (topicFilter.QualityOfServiceLevel == MqttQualityOfServiceLevel.AtMostOnce)
             {
@@ -530,13 +520,7 @@ namespace MQTTnet.Server
 
         async Task<InterceptingUnsubscriptionEventArgs> InterceptUnsubscribe(string topicFilter, MqttSubscription mqttSubscription, CancellationToken cancellationToken)
         {
-            var clientUnsubscribingTopicEventArgs = new InterceptingUnsubscriptionEventArgs
-            {
-                ClientId = _session.Id,
-                Topic = topicFilter,
-                SessionItems = _session.Items,
-                CancellationToken = cancellationToken
-            };
+            var clientUnsubscribingTopicEventArgs = new InterceptingUnsubscriptionEventArgs(cancellationToken, topicFilter, _session.Items, topicFilter);
 
             if (mqttSubscription == null)
             {

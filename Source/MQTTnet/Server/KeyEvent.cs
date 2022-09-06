@@ -11,6 +11,7 @@ namespace MQTTnet
         /// </summary>
         /// <param name="eventTime">Time when the event should fire</param>
         /// <param name="sequenceNo">Sequence number to distinguish events with the same event time</param>
+        /// <param name="key">Unique event identifier</param>
         /// <param name="args">Event parameters</param>
         public KeyEvent(DateTime eventTime, int sequenceNo, TKey key, TEventArgs args)
         {

@@ -2,8 +2,13 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+// ReSharper disable UnusedType.Global
+// ReSharper disable UnusedMember.Global
+// ReSharper disable InconsistentNaming
+
 using System.Security.Authentication;
 using MQTTnet.Client;
+using MQTTnet.Extensions.WebSocket4Net;
 using MQTTnet.Formatter;
 using MQTTnet.Samples.Helpers;
 
@@ -138,6 +143,30 @@ public static class Client_Connection_Samples
          */
 
         var mqttFactory = new MqttFactory();
+
+        using (var mqttClient = mqttFactory.CreateMqttClient())
+        {
+            var mqttClientOptions = new MqttClientOptionsBuilder().WithWebSocketServer("broker.hivemq.com:8000/mqtt").Build();
+
+            var response = await mqttClient.ConnectAsync(mqttClientOptions, CancellationToken.None);
+
+            Console.WriteLine("The MQTT client is connected.");
+
+            response.DumpToConsole();
+        }
+    }
+    
+    public static async Task Connect_Client_Using_WebSocket4Net()
+    {
+        /*
+         * This sample creates a simple MQTT client and connects to a public broker using a WebSocket connection.
+         * Instead of the .NET implementation of WebSockets the implementaion from WebSocket4Net is used. It provides more
+         * encryption algorithms and supports more platforms.
+         * 
+         * This is a modified version of the sample _Connect_Client_! See other sample for more details.
+         */
+
+        var mqttFactory = new MqttFactory().UseWebSocket4Net();
 
         using (var mqttClient = mqttFactory.CreateMqttClient())
         {

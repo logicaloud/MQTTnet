@@ -3,6 +3,8 @@
 // See the LICENSE file in the project root for more information.
 
 using System;
+using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -19,18 +21,19 @@ namespace MQTTnet.Server
     public class MqttServer : Disposable
     {
         readonly MqttServerEventContainer _eventContainer = new MqttServerEventContainer();
-        
+
+        readonly IDictionary _sessionItems = new ConcurrentDictionary<object, object>();
         readonly ICollection<IMqttServerAdapter> _adapters;
+        readonly MqttClientSessionsManager _clientSessionsManager;
+        readonly MqttServerKeepAliveMonitor _keepAliveMonitor;
         readonly MqttNetSourceLogger _logger;
         readonly MqttServerOptions _options;
-        readonly IMqttNetLogger _rootLogger;
         readonly MqttRetainedMessagesManager _retainedMessagesManager;
         readonly MqttPersistedSessionManager _persistedSessionManager;
-        readonly MqttServerKeepAliveMonitor _keepAliveMonitor;
-        readonly MqttClientSessionsManager _clientSessionsManager;
+        readonly IMqttNetLogger _rootLogger;
         
         CancellationTokenSource _cancellationTokenSource;
-        
+
         public MqttServer(MqttServerOptions options, IEnumerable<IMqttServerAdapter> adapters, IMqttNetLogger logger)
         {
             _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -57,6 +60,12 @@ namespace MQTTnet.Server
         {
             add => _eventContainer.ApplicationMessageNotConsumedEvent.AddHandler(value);
             remove => _eventContainer.ApplicationMessageNotConsumedEvent.RemoveHandler(value);
+        }
+
+        public event Func<ClientAcknowledgedPublishPacketEventArgs, Task> ClientAcknowledgedPublishPacketAsync
+        {
+            add => _eventContainer.ClientAcknowledgedPublishPacketEvent.AddHandler(value);
+            remove => _eventContainer.ClientAcknowledgedPublishPacketEvent.RemoveHandler(value);
         }
 
         public event Func<ClientConnectedEventArgs, Task> ClientConnectedAsync
@@ -113,6 +122,18 @@ namespace MQTTnet.Server
             remove => _eventContainer.InterceptingUnsubscriptionEvent.RemoveHandler(value);
         }
 
+        public event Func<LoadingRetainedMessagesEventArgs, Task> LoadingRetainedMessageAsync
+        {
+            add => _eventContainer.LoadingRetainedMessagesEvent.AddHandler(value);
+            remove => _eventContainer.LoadingRetainedMessagesEvent.RemoveHandler(value);
+        }
+
+        public event Func<EventArgs, Task> PreparingSessionAsync
+        {
+            add => _eventContainer.PreparingSessionEvent.AddHandler(value);
+            remove => _eventContainer.PreparingSessionEvent.RemoveHandler(value);
+        }
+
         public event Func<RetainedMessageChangedEventArgs, Task> RetainedMessageChangedAsync
         {
             add => _eventContainer.RetainedMessageChangedEvent.AddHandler(value);
@@ -125,22 +146,10 @@ namespace MQTTnet.Server
             remove => _eventContainer.RetainedMessageRemovedEvent.RemoveHandler(value);
         }
 
-        public event Func<LoadingRetainedMessagesEventArgs, Task> LoadingRetainedMessageAsync
-        {
-            add => _eventContainer.LoadingRetainedMessagesEvent.AddHandler(value);
-            remove => _eventContainer.LoadingRetainedMessagesEvent.RemoveHandler(value);
-        }
-
         public event Func<EventArgs, Task> RetainedMessagesClearedAsync
         {
             add => _eventContainer.RetainedMessagesClearedEvent.AddHandler(value);
             remove => _eventContainer.RetainedMessagesClearedEvent.RemoveHandler(value);
-        }
-
-        public event Func<EventArgs, Task> PreparingSessionAsync
-        {
-            add => _eventContainer.PreparingSessionEvent.AddHandler(value);
-            remove => _eventContainer.PreparingSessionEvent.RemoveHandler(value);
         }
 
         public event Func<SessionDeletedEventArgs, Task> SessionDeletedAsync
@@ -257,7 +266,7 @@ namespace MQTTnet.Server
         }
 
         public bool IsStarted => _cancellationTokenSource != null;
-        
+
         public Task DeleteRetainedMessagesAsync()
         {
             ThrowIfNotStarted();
@@ -273,10 +282,10 @@ namespace MQTTnet.Server
             }
 
             ThrowIfNotStarted();
-            
+
             return _clientSessionsManager.GetClient(id).StopAsync(reasonCode);
         }
-        
+
         public Task<IList<MqttClientStatus>> GetClientsAsync()
         {
             ThrowIfNotStarted();
@@ -298,7 +307,7 @@ namespace MQTTnet.Server
             return _clientSessionsManager.GetSessionStatusAsync();
         }
 
-        public Task InjectApplicationMessage(InjectedMqttApplicationMessage injectedApplicationMessage)
+        public async Task InjectApplicationMessage(InjectedMqttApplicationMessage injectedApplicationMessage)
         {
             if (injectedApplicationMessage == null)
             {
@@ -314,7 +323,34 @@ namespace MQTTnet.Server
 
             ThrowIfNotStarted();
 
-            return _clientSessionsManager.DispatchApplicationMessage(injectedApplicationMessage.SenderClientId, injectedApplicationMessage.ApplicationMessage);
+            var processPublish = true;
+            var applicationMessage = injectedApplicationMessage.ApplicationMessage;
+
+            if (_eventContainer.InterceptingPublishEvent.HasHandlers)
+            {
+                var interceptingPublishEventArgs = new InterceptingPublishEventArgs(
+                    applicationMessage,
+                    _cancellationTokenSource.Token,
+                    injectedApplicationMessage.SenderClientId,
+                    _sessionItems);
+
+                await _eventContainer.InterceptingPublishEvent.InvokeAsync(interceptingPublishEventArgs).ConfigureAwait(false);
+
+                applicationMessage = interceptingPublishEventArgs.ApplicationMessage;
+                processPublish = interceptingPublishEventArgs.ProcessPublish;
+            }
+
+            if (!processPublish)
+            {
+                return;
+            }
+            
+            if (string.IsNullOrEmpty(applicationMessage.Topic))
+            {
+                throw new NotSupportedException("Injected application messages must contain a topic. Topic alias is not supported.");
+            }
+            
+            await _clientSessionsManager.DispatchApplicationMessage(injectedApplicationMessage.SenderClientId, applicationMessage).ConfigureAwait(false);
         }
 
         public async Task StartAsync()
@@ -336,7 +372,7 @@ namespace MQTTnet.Server
             }
 
             await _eventContainer.StartedEvent.InvokeAsync(EventArgs.Empty).ConfigureAwait(false);
-            
+
             _logger.Info("Started.");
         }
 
@@ -366,7 +402,7 @@ namespace MQTTnet.Server
             }
 
             await _eventContainer.StoppedEvent.InvokeAsync(EventArgs.Empty).ConfigureAwait(false);
-            
+
             _logger.Info("Stopped.");
         }
 
@@ -410,7 +446,7 @@ namespace MQTTnet.Server
 
             return _clientSessionsManager.UnsubscribeAsync(clientId, topicFilters);
         }
-        
+
         public Task UpdateRetainedMessageAsync(MqttApplicationMessage retainedMessage)
         {
             if (retainedMessage == null)
@@ -447,7 +483,7 @@ namespace MQTTnet.Server
         void ThrowIfNotStarted()
         {
             ThrowIfDisposed();
-            
+
             if (_cancellationTokenSource == null)
             {
                 throw new InvalidOperationException("The MQTT server is not started.");
@@ -457,7 +493,7 @@ namespace MQTTnet.Server
         void ThrowIfStarted()
         {
             ThrowIfDisposed();
-            
+
             if (_cancellationTokenSource != null)
             {
                 throw new InvalidOperationException("The MQTT server is already started.");

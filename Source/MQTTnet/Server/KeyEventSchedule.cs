@@ -49,6 +49,7 @@ namespace MQTTnet
         /// Schedule event that fires intervalInSeconds from now.
         /// </summary>
         /// <param name="intervalInSeconds">Number of seconds</param>
+        /// <param name="key">Unique event identifier</param>
         /// <param name="args">Arguments for callback the event fires</param>
         /// <returns></returns>
         public void AddOrUpdateEvent(uint intervalInSeconds, TEventKey key, TEventArgs args)

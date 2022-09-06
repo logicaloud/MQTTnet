@@ -5,6 +5,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -24,7 +25,7 @@ namespace MQTTnet.Server
 
         readonly MqttServerOptions _serverOptions;
 
-        readonly Dictionary<ushort, MqttPublishPacket> _unacknowledgedPublishPackets = new Dictionary<ushort, MqttPublishPacket>();
+        readonly ConcurrentDictionary<ushort, MqttPublishPacket> _unacknowledgedPublishPackets = new ConcurrentDictionary<ushort, MqttPublishPacket>();
 
         // Bookkeeping to know if this is a subscribing client; lazy initialize later.
         HashSet<string> _subscribedTopics;
@@ -83,18 +84,26 @@ namespace MQTTnet.Server
 
         public bool PersistedMessagesAreRestored { get; set; }
 
-        public Task AcknowledgePublishPacketAsync(ushort packetIdentifier)
-        {
-            if (_unacknowledgedPublishPackets.TryGetValue(packetIdentifier, out var publishPacket))
-            {
-                _unacknowledgedPublishPackets.Remove(packetIdentifier);
 
+        public MqttPublishPacket PeekAcknowledgePublishPacket(ushort packetIdentifier)
+        {
+            // This will only return the matching PUBLISH packet but does not remove it.
+            // This is required for QoS 2.
+            _unacknowledgedPublishPackets.TryGetValue(packetIdentifier, out var publishPacket);
+            return publishPacket;
+        }
+
+        public async Task<MqttPublishPacket> AcknowledgePublishPacketAsync(ushort packetIdentifier)
+        {
+            if (_unacknowledgedPublishPackets.TryRemove(packetIdentifier, out var publishPacket))
+            {
                 if ((publishPacket.PersistedMessageKey != null) && _persistedSessionManager.IsWritable)
                 {
-                    return _persistedSessionManager.RemoveMessageAsync(publishPacket.PersistedMessageKey);
+                    await _persistedSessionManager.RemoveMessageAsync(publishPacket.PersistedMessageKey).ConfigureAwait(false);
                 }
+                return publishPacket;
             }
-            return Implementations.PlatformAbstractionLayer.CompletedTask;
+            return null;
         }
 
         public void AddSubscribedTopic(string topic)
