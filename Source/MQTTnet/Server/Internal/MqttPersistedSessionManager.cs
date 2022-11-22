@@ -62,7 +62,7 @@ namespace MQTTnet.Server
             {
                 LogException(ex);
             }
-            return Implementations.PlatformAbstractionLayer.CompletedTask;
+            return Internal.CompletedTask.Instance;
         }
 
         /// <summary>
@@ -97,7 +97,7 @@ namespace MQTTnet.Server
             {
                 LogException(ex);
             }
-            return Implementations.PlatformAbstractionLayer.CompletedTask;
+            return Internal.CompletedTask.Instance;
         }
 
         /// <summary>
@@ -121,7 +121,7 @@ namespace MQTTnet.Server
             {
                 LogException(ex);
             }
-            return Implementations.PlatformAbstractionLayer.CompletedTask;
+            return Internal.CompletedTask.Instance;
         }
 
         /// <summary>
@@ -140,7 +140,7 @@ namespace MQTTnet.Server
             {
                 LogException(ex);
             }
-            return Implementations.PlatformAbstractionLayer.CompletedTask;
+            return Internal.CompletedTask.Instance;
         }
 
         /// <summary>
@@ -161,7 +161,7 @@ namespace MQTTnet.Server
             {
                 LogException(ex);
             }
-            return Implementations.PlatformAbstractionLayer.CompletedTask;
+            return Internal.CompletedTask.Instance;
         }
 
         /// <summary>
@@ -180,7 +180,7 @@ namespace MQTTnet.Server
             {
                 LogException(ex);
             }
-            return Implementations.PlatformAbstractionLayer.CompletedTask;
+            return Internal.CompletedTask.Instance;
         }
 
         /// <summary>
@@ -199,7 +199,7 @@ namespace MQTTnet.Server
             {
                 LogException(ex);
             }
-            return Implementations.PlatformAbstractionLayer.CompletedTask;
+            return Internal.CompletedTask.Instance;
         }
 
         /// <summary>
@@ -238,7 +238,7 @@ namespace MQTTnet.Server
             {
                 LogException(ex);
             }
-            return Implementations.PlatformAbstractionLayer.CompletedTask;
+            return Internal.CompletedTask.Instance;
         }
 
         void LogException(Exception ex)

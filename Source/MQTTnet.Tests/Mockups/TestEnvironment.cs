@@ -11,9 +11,10 @@ using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using MQTTnet.Client;
 using MQTTnet.Diagnostics;
+using MQTTnet.Extensions.ManagedClient;
 using MQTTnet.Extensions.Rpc;
 using MQTTnet.Formatter;
-using MQTTnet.Implementations;
+using MQTTnet.Internal;
 using MQTTnet.LowLevelClient;
 using MQTTnet.Protocol;
 using MQTTnet.Server;
@@ -109,7 +110,7 @@ namespace MQTTnet.Tests.Mockups
             configureOptions.Invoke(optionsBuilder);
 
             var options = optionsBuilder.Build();
-            
+
             var client = CreateClient();
 
             if (timeout == TimeSpan.Zero)
@@ -137,7 +138,7 @@ namespace MQTTnet.Tests.Mockups
             options = options.WithTcpServer("127.0.0.1", ServerPort);
 
             var client = CreateClient();
-            
+
             if (timeout == TimeSpan.Zero)
             {
                 await client.ConnectAsync(options.Build()).ConfigureAwait(false);
@@ -161,7 +162,7 @@ namespace MQTTnet.Tests.Mockups
             }
 
             var client = CreateClient();
-            
+
             if (timeout == TimeSpan.Zero)
             {
                 await client.ConnectAsync(options).ConfigureAwait(false);
@@ -199,6 +200,16 @@ namespace MQTTnet.Tests.Mockups
             return new TestApplicationMessageReceivedHandler(mqttClient);
         }
 
+        public TestApplicationMessageReceivedHandler CreateApplicationMessageHandler(IManagedMqttClient managedClient)
+        {
+            if (managedClient == null)
+            {
+                throw new ArgumentNullException(nameof(managedClient));
+            }
+
+            return new TestApplicationMessageReceivedHandler(managedClient.InternalClient);
+        }
+
         public IMqttClient CreateClient()
         {
             lock (_clients)
@@ -220,7 +231,7 @@ namespace MQTTnet.Tests.Mockups
                         }
                     }
 
-                    return PlatformAbstractionLayer.CompletedTask;
+                    return CompletedTask.Instance;
                 };
 
                 return client;
@@ -261,7 +272,7 @@ namespace MQTTnet.Tests.Mockups
                     }
                 }
 
-                return PlatformAbstractionLayer.CompletedTask;
+                return CompletedTask.Instance;
             };
 
             return Server;
@@ -325,7 +336,7 @@ namespace MQTTnet.Tests.Mockups
             var options = optionsBuilder.Build();
             var server = CreateServer(options);
             await server.StartAsync();
-            
+
             // The OS has chosen the port to we have to properly expose it to the tests.
             ServerPort = options.DefaultEndpointOptions.Port;
             return server;
@@ -344,7 +355,7 @@ namespace MQTTnet.Tests.Mockups
             var options = optionsBuilder.Build();
             var server = CreateServer(options);
             await server.StartAsync();
-            
+
             // The OS has chosen the port to we have to properly expose it to the tests.
             ServerPort = options.DefaultEndpointOptions.Port;
             return server;

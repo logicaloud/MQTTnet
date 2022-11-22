@@ -69,6 +69,17 @@ namespace MQTTnet.Client
             return mqttClient.PublishBinaryAsync(topic, payloadBuffer, qualityOfServiceLevel, retain, cancellationToken);
         }
 
+        public static Task ReconnectAsync(this IMqttClient client, CancellationToken cancellationToken = default)
+        {
+            if (client.Options == null)
+            {
+                throw new InvalidOperationException(
+                    "The MQTT client was not connected before. A reconnect is only permitted when the client was already connected or at least tried to.");
+            }
+
+            return client.ConnectAsync(client.Options, cancellationToken);
+        }
+
         public static Task SendExtendedAuthenticationExchangeDataAsync(this IMqttClient client, MqttExtendedAuthenticationExchangeData data)
         {
             if (client == null)
@@ -115,6 +126,26 @@ namespace MQTTnet.Client
             var subscribeOptions = new MqttClientSubscribeOptionsBuilder().WithTopicFilter(topic, qualityOfServiceLevel).Build();
 
             return mqttClient.SubscribeAsync(subscribeOptions, cancellationToken);
+        }
+
+        public static async Task<bool> TryPingAsync(this IMqttClient client, CancellationToken cancellationToken = default)
+        {
+            if (client == null)
+            {
+                throw new ArgumentNullException(nameof(client));
+            }
+
+            try
+            {
+                await client.PingAsync(cancellationToken).ConfigureAwait(false);
+                return true;
+            }
+            catch
+            {
+                // Ignore errors.
+            }
+
+            return false;
         }
 
         public static Task<MqttClientUnsubscribeResult> UnsubscribeAsync(this IMqttClient mqttClient, string topic, CancellationToken cancellationToken = default)
