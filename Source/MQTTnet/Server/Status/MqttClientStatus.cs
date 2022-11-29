@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for more information.
 
 using System;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading.Tasks;
 using MQTTnet.Formatter;
 using MQTTnet.Protocol;
