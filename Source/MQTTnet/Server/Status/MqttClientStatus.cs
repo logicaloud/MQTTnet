@@ -50,6 +50,8 @@ namespace MQTTnet.Server
 
         public long BytesReceived => _client.ChannelAdapter.BytesReceived;
         
+        public X509Certificate2 ClientCertificate => _client.ChannelAdapter.ClientCertificate;
+
         public Task DisconnectAsync()
         {
             return _client.StopAsync(MqttDisconnectReasonCode.NormalDisconnection);
