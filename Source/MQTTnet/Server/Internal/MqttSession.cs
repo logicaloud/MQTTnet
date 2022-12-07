@@ -106,19 +106,6 @@ namespace MQTTnet.Server
             return publishPacket;
         }
 
-        public MqttPublishPacket AcknowledgePublishPacket(ushort packetIdentifier)
-        {
-            MqttPublishPacket publishPacket;
-
-            lock (_unacknowledgedPublishPackets)
-            {
-                publishPacket = _unacknowledgedPublishPackets.FirstOrDefault(p => p.PacketIdentifier.Equals(packetIdentifier));
-                _unacknowledgedPublishPackets.Remove(publishPacket);
-            }
-
-            return publishPacket;
-        }
-
         public void AddSubscribedTopic(string topic)
         {
             if (_subscribedTopics == null)

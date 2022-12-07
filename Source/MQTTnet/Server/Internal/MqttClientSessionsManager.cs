@@ -31,7 +31,6 @@ namespace MQTTnet.Server
 
         readonly MqttRetainedMessagesManager _retainedMessagesManager;
         readonly MqttPersistedSessionManager _persistedSessionManager;
-        readonly MqttApplicationMessageFactory _applicationMessageFactory;
 
         readonly IMqttNetLogger _rootLogger;
 
@@ -67,7 +66,6 @@ namespace MQTTnet.Server
             _options = options ?? throw new ArgumentNullException(nameof(options));
             _retainedMessagesManager = retainedMessagesManager ?? throw new ArgumentNullException(nameof(retainedMessagesManager));
             _persistedSessionManager = persistedSessionManager ?? throw new ArgumentNullException(nameof(persistedSessionManager));
-            _applicationMessageFactory = new MqttApplicationMessageFactory();
             _eventContainer = eventContainer ?? throw new ArgumentNullException(nameof(eventContainer));
             _sessionExpiryEvents = new KeyEventSchedule<string, object>(OnSessionExpiredEvent, default);
             _willDelayEvents = new KeyEventSchedule<string, MqttApplicationMessage>(OnWillDelayExpiredEvent, default);
@@ -736,8 +734,8 @@ namespace MQTTnet.Server
                         uint? willDelayInterval = null;
                         if (connectPacket.WillFlag)
                         {
-                            var willPublishPacket = _packetFactories.Publish.Create(connectPacket);
-                            willMessage = _applicationMessageFactory.Create(willPublishPacket);
+                            var willPublishPacket = MqttPacketFactories.Publish.Create(connectPacket);
+                            willMessage = MqttApplicationMessageFactory.Create(willPublishPacket);
                             willDelayInterval = connectPacket.WillDelayInterval;
                         }
                         // Add or update session parameters
@@ -754,7 +752,7 @@ namespace MQTTnet.Server
                         var persistedMessages = await _persistedSessionManager.LoadSessionMessagesAsync(connectPacket.ClientId).ConfigureAwait(false);
                         foreach (var message in persistedMessages)
                         {
-                            var publishPacket = _packetFactories.Publish.Create(message.ApplicationMessage);
+                            var publishPacket = MqttPacketFactories.Publish.Create(message.ApplicationMessage);
                             // adjust publish packet with granted Qos Level and subscription identifers as at the time of publishing (DispatchPublishPacket)
                             publishPacket.QualityOfServiceLevel = message.CheckedQualityOfServiceLevel;
                             if ((message.CheckedSubscriptionIdentifiers != null) && (message.CheckedSubscriptionIdentifiers.Count > 0))

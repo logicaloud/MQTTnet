@@ -196,6 +196,12 @@ namespace MQTTnet.Server
             }
         }
 
+        void HandleIncomingPingReqPacket()
+        {
+            // See: The Server MUST send a PINGRESP packet in response to a PINGREQ packet [MQTT-3.12.4-1].
+            Session.EnqueueHealthPacket(new MqttPacketBusItem(MqttPingRespPacket.Instance));
+        }
+
         async Task HandleIncomingPubCompPacket(MqttPubCompPacket pubCompPacket)
         {
             var acknowledgedPublishPacket = await Session.AcknowledgePublishPacketAsync(pubCompPacket.PacketIdentifier);
@@ -277,7 +283,7 @@ namespace MQTTnet.Server
             // properly when the client has sent the PUBCOMP packet.
             var pubRelPacket = MqttPacketFactories.PubRel.Create(pubRecPacket, MqttApplicationMessageReceivedReasonCode.Success);
             Session.EnqueueControlPacket(new MqttPacketBusItem(pubRelPacket));
-        
+
             return CompletedTask.Instance;
         }
 
@@ -457,7 +463,7 @@ namespace MQTTnet.Server
                     }
                     else if (currentPacket is MqttDisconnectPacket)
                     {
-                        HandleIncomingDisconnectPacket(packet as MqttDisconnectPacket);
+                        HandleIncomingDisconnectPacket(currentPacket as MqttDisconnectPacket);
                         return;
                     }
                     else

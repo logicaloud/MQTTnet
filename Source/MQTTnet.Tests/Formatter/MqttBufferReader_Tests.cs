@@ -16,28 +16,6 @@ namespace MQTTnet.Tests.Formatter
     [TestClass]
     public sealed class MqttBufferReader_Tests
     {
-        // Helper class to build up a reference to elements of various types in a buffer
-        class ElementReference
-        {
-            public const int NumBufferElementTypes = 5;
-            public enum BufferElementType { Byte, TwoByteInt, FourByteInt, VariableSizeInt, String };
-
-            public ElementReference(BufferElementType type, int size, uint numberValue, string stringValue, int bufferOffset)
-            {
-                Type = type;
-                Size = size;
-                NumberValue = numberValue;
-                StringValue = stringValue;
-                BufferOffset = bufferOffset;
-            }
-            public BufferElementType Type { get; }
-            public int Size { get; }
-            public uint NumberValue { get; }
-            public string StringValue { get; }
-            public int BufferOffset { get; }
-        }
-
-
         [TestMethod]
         [ExpectedException(typeof(MqttProtocolViolationException), "Expected at least 4 bytes but there are only 3 bytes")]
         public void Fire_Exception_If_Not_Enough_Data()

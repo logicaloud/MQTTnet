@@ -19,9 +19,6 @@ namespace MQTTnet.Server
         // Start with 1 because the CONNECT packet is not counted here.
         long _sentPacketsCount = 1;
 
-        long _receivedApplicationMessagesCount;
-        long _sentApplicationMessagesCount;
-
         static long _totalNumMessagesReceived;
         static long _totalNumMessagesSent;
 
