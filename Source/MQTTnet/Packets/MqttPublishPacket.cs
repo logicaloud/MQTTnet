@@ -23,8 +23,6 @@ namespace MQTTnet.Packets
         /// </summary>
         public System.DateTime? MessageExpiryTimestamp { get; set; }
 
-        public byte[] Payload { get; set; }
-
         public MqttPayloadFormatIndicator PayloadFormatIndicator { get; set; } = MqttPayloadFormatIndicator.Unspecified;
 
         public ArraySegment<byte> PayloadSegment { get; set; }

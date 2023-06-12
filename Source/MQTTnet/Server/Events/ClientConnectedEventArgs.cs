@@ -4,7 +4,6 @@
 
 using System;
 using System.Collections;
-using System.Security.Cryptography.X509Certificates;
 using System.Collections.Generic;
 using MQTTnet.Formatter;
 using MQTTnet.Packets;
@@ -13,6 +12,8 @@ namespace MQTTnet.Server
 {
     public sealed class ClientConnectedEventArgs : EventArgs
     {
+        readonly MqttConnectPacket _connectPacket;
+
         public ClientConnectedEventArgs(MqttConnectPacket connectPacket, MqttProtocolVersion protocolVersion, string endpoint, IDictionary sessionItems)
         {
             _connectPacket = connectPacket ?? throw new ArgumentNullException(nameof(connectPacket));
@@ -20,8 +21,6 @@ namespace MQTTnet.Server
             Endpoint = endpoint;
             SessionItems = sessionItems ?? throw new ArgumentNullException(nameof(sessionItems));
         }
-        
-        readonly MqttConnectPacket _connectPacket;
 
         public byte[] AuthenticationData => _connectPacket.AuthenticationData;
 
