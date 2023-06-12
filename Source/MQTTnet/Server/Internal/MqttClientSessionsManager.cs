@@ -276,13 +276,25 @@ namespace MQTTnet.Server
                             continue;
                         }
 
-                        var newPublishPacket = MqttPacketFactories.Publish.Create(applicationMessage);
-                        newPublishPacket.QualityOfServiceLevel = checkSubscriptionsResult.QualityOfServiceLevel;
-                        newPublishPacket.SubscriptionIdentifiers = checkSubscriptionsResult.SubscriptionIdentifiers;
-
-                        if (newPublishPacket.QualityOfServiceLevel > 0)
+                        if (_eventContainer.InterceptingClientEnqueueEvent.HasHandlers)
                         {
-                            newPublishPacket.PacketIdentifier = session.PacketIdentifierProvider.GetNextPacketIdentifier();
+                            var eventArgs = new InterceptingClientApplicationMessageEnqueueEventArgs(senderId, session.Id, applicationMessage);
+                            await _eventContainer.InterceptingClientEnqueueEvent.InvokeAsync(eventArgs).ConfigureAwait(false);
+
+                            if (!eventArgs.AcceptEnqueue)
+                            {
+                                // Continue checking the other subscriptions
+                                continue;
+                            }
+                        }
+
+                        var publishPacketCopy = MqttPacketFactories.Publish.Create(applicationMessage);
+                        publishPacketCopy.QualityOfServiceLevel = checkSubscriptionsResult.QualityOfServiceLevel;
+                        publishPacketCopy.SubscriptionIdentifiers = checkSubscriptionsResult.SubscriptionIdentifiers;
+
+                        if (publishPacketCopy.QualityOfServiceLevel > 0)
+                        {
+                            publishPacketCopy.PacketIdentifier = session.PacketIdentifierProvider.GetNextPacketIdentifier();
 
                             if (session.IsPersistent && _persistedSessionManager.IsWritable)
                             {
@@ -302,24 +314,24 @@ namespace MQTTnet.Server
 
                         if (applicationMessage.MessageExpiryInterval > 0)
                         {
-                            newPublishPacket.MessageExpiryTimestamp = DateTime.UtcNow.AddSeconds(applicationMessage.MessageExpiryInterval);
+                            publishPacketCopy.MessageExpiryTimestamp = DateTime.UtcNow.AddSeconds(applicationMessage.MessageExpiryInterval);
                         }
 
                         if (checkSubscriptionsResult.RetainAsPublished)
                         {
                             // Transfer the original retain state from the publisher. This is a MQTTv5 feature.
-                            newPublishPacket.Retain = applicationMessage.Retain;
+                            publishPacketCopy.Retain = applicationMessage.Retain;
                         }
                         else
                         {
-                            newPublishPacket.Retain = false;
+                            publishPacketCopy.Retain = false;
                         }
 
                         // TODO:
                         // Review: there is currently nothing that removes an expired message from the queue.
                         // The message is simply skipped when packets are processed.
 
-                        session.EnqueueDataPacket(new MqttPacketBusItem(newPublishPacket));
+                        session.EnqueueDataPacket(new MqttPacketBusItem(publishPacketCopy));
                         matchingSubscribersCount++;
 
                         _logger.Verbose("Client '{0}': Queued PUBLISH packet with topic '{1}'.", session.Id, applicationMessage.Topic);
@@ -327,6 +339,7 @@ namespace MQTTnet.Server
 
                     if (matchingSubscribersCount == 0)
                     {
+                        reasonCode = (int)MqttPubAckReasonCode.NoMatchingSubscribers;
                         await FireApplicationMessageNotConsumedEvent(applicationMessage, senderId).ConfigureAwait(false);
                     }
                     else if (persistingApplicationMessageClients != null)

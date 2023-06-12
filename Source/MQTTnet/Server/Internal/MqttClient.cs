@@ -63,8 +63,6 @@ namespace MQTTnet.Server
 
         public string Id => _connectPacket.ClientId;
 
-        public bool IsCleanDisconnect { get; private set; }
-
         public bool IsRunning { get; private set; }
 
         public bool IsTakenOver { get; set; }
@@ -577,6 +575,7 @@ namespace MQTTnet.Server
 
         void HandleIncomingDisconnectPacket(MqttDisconnectPacket disconnectPacket)
         {
+            DisconnectPacket = disconnectPacket;
             /* MQTT 5
              * If the Session Expiry Interval is absent, the Session Expiry Interval in the CONNECT packet is used.
              * The Session Expiry Interval MUST NOT be sent on a DISCONNECT by the Server [MQTT-3.14.2-2].
@@ -588,8 +587,7 @@ namespace MQTTnet.Server
             if ((Session.SessionExpiryInterval == 0) && (sessionExpiryInterval != 0))
             {
                 // protocol error Reason Code 0x82 (Protocol Error)
-                // TODO: review
-                IsCleanDisconnect = false;
+                DisconnectPacket.ReasonCode = MqttDisconnectReasonCode.ProtocolError;
             }
             else
             {
@@ -604,7 +602,7 @@ namespace MQTTnet.Server
                  * The Client can arrange for the Will Message to notify that Session Expiry has occurred by setting the Will Delay Interval to be 
                  * longer than the Session Expiry Interval and sending DISCONNECT with Reason Code 0x04 (Disconnect with Will Message).
                  */
-                IsCleanDisconnect = true;
+                
             }
         }
 
