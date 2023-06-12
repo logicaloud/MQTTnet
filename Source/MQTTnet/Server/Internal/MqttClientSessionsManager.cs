@@ -487,7 +487,6 @@ namespace MQTTnet.Server
                 if (_eventContainer.ClientConnectedEvent.HasHandlers)
                 {
                     var eventArgs = new ClientConnectedEventArgs(connectPacket,
-                        channelAdapter.ClientCertificate,
                         channelAdapter.PacketFormatterAdapter.ProtocolVersion,
                         channelAdapter.Endpoint,
                         client.Session.Items);

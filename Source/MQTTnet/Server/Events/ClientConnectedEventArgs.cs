@@ -13,10 +13,9 @@ namespace MQTTnet.Server
 {
     public sealed class ClientConnectedEventArgs : EventArgs
     {
-        public ClientConnectedEventArgs(MqttConnectPacket connectPacket,X509Certificate2 clientCertificate,  MqttProtocolVersion protocolVersion, string endpoint, IDictionary sessionItems)
+        public ClientConnectedEventArgs(MqttConnectPacket connectPacket, MqttProtocolVersion protocolVersion, string endpoint, IDictionary sessionItems)
         {
             _connectPacket = connectPacket ?? throw new ArgumentNullException(nameof(connectPacket));
-            ClientCertificate = clientCertificate;
             ProtocolVersion = protocolVersion;
             Endpoint = endpoint;
             SessionItems = sessionItems ?? throw new ArgumentNullException(nameof(sessionItems));
@@ -53,11 +52,6 @@ namespace MQTTnet.Server
         ///     Gets the user name of the connected client.
         /// </summary>
         public string UserName => _connectPacket.Username;
-
-        /// <summary>
-        ///     Gets the client certificate of the connected client or Null if none is used.
-        /// </summary>
-        public X509Certificate2 ClientCertificate { get; }
 
         /// <summary>
         ///     Gets the user properties sent by the client.
