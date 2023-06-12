@@ -27,6 +27,17 @@ namespace MQTTnet.Tests.Mockups
             mqttClient.ApplicationMessageReceivedAsync += OnApplicationMessageReceivedAsync;
         }
 
+        public int Count
+        {
+            get
+            {
+                lock (_receivedEventArgs)
+                {
+                    return _receivedEventArgs.Count;
+                }
+            }
+        }
+
         public List<MqttApplicationMessageReceivedEventArgs> ReceivedEventArgs
         {
             get
@@ -40,10 +51,7 @@ namespace MQTTnet.Tests.Mockups
 
         public void AssertReceivedCountEquals(int expectedCount)
         {
-            lock (_receivedEventArgs)
-            {
-                Assert.AreEqual(expectedCount, _receivedEventArgs.Count);
-            }
+            Assert.AreEqual(expectedCount, Count);
         }
 
         public string GeneratePayloadSequence()

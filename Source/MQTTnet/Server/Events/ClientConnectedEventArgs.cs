@@ -5,27 +5,34 @@
 using System;
 using System.Collections;
 using System.Security.Cryptography.X509Certificates;
+using System.Collections.Generic;
 using MQTTnet.Formatter;
+using MQTTnet.Packets;
 
 namespace MQTTnet.Server
 {
     public sealed class ClientConnectedEventArgs : EventArgs
     {
-        public ClientConnectedEventArgs(string clientId, string userName, X509Certificate2 clientCertificate, MqttProtocolVersion protocolVersion, string endpoint, IDictionary sessionItems)
+        public ClientConnectedEventArgs(MqttConnectPacket connectPacket, X509Certificate2 clientCertificate, MqttProtocolVersion protocolVersion, string endpoint, IDictionary sessionItems)
         {
-            ClientId = clientId ?? throw new ArgumentNullException(nameof(clientId));
-            UserName = userName;
+            _connectPacket = connectPacket ?? throw new ArgumentNullException(nameof(connectPacket));
             ClientCertificate = clientCertificate;
             ProtocolVersion = protocolVersion;
             Endpoint = endpoint;
             SessionItems = sessionItems ?? throw new ArgumentNullException(nameof(sessionItems));
         }
+        
+        readonly MqttConnectPacket _connectPacket;
+
+        public byte[] AuthenticationData => _connectPacket.AuthenticationData;
+
+        public string AuthenticationMethod => _connectPacket.AuthenticationMethod;
 
         /// <summary>
         ///     Gets the client identifier of the connected client.
         ///     Hint: This identifier needs to be unique over all used clients / devices on the broker to avoid connection issues.
         /// </summary>
-        public string ClientId { get; }
+        public string ClientId => _connectPacket.ClientId;
 
         /// <summary>
         ///     Gets the endpoint of the connected client.
@@ -45,11 +52,17 @@ namespace MQTTnet.Server
         /// <summary>
         ///     Gets the user name of the connected client.
         /// </summary>
-        public string UserName { get; }
+        public string UserName => _connectPacket.Username;
 
         /// <summary>
         ///     Gets the client certificate of the connected client or Null if none is used.
         /// </summary>
         public X509Certificate2 ClientCertificate { get; }
+
+        /// <summary>
+        ///     Gets the user properties sent by the client.
+        ///     <remarks>MQTT 5.0.0+ feature.</remarks>
+        /// </summary>
+        public List<MqttUserProperty> UserProperties => _connectPacket?.UserProperties;
     }
 }

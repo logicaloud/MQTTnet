@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using System;
 using System.Collections.Generic;
 using MQTTnet.Protocol;
 
@@ -26,6 +27,8 @@ namespace MQTTnet.Packets
 
         public MqttPayloadFormatIndicator PayloadFormatIndicator { get; set; } = MqttPayloadFormatIndicator.Unspecified;
 
+        public ArraySegment<byte> PayloadSegment { get; set; }
+
         public MqttQualityOfServiceLevel QualityOfServiceLevel { get; set; } = MqttQualityOfServiceLevel.AtMostOnce;
 
         public string ResponseTopic { get; set; }
@@ -49,7 +52,7 @@ namespace MQTTnet.Packets
         public override string ToString()
         {
             return
-                $"Publish: [Topic={Topic}] [Payload.Length={Payload?.Length}] [QoSLevel={QualityOfServiceLevel}] [Dup={Dup}] [Retain={Retain}] [PacketIdentifier={PacketIdentifier}]";
+                $"Publish: [Topic={Topic}] [PayloadLength={PayloadSegment.Count}] [QoSLevel={QualityOfServiceLevel}] [Dup={Dup}] [Retain={Retain}] [PacketIdentifier={PacketIdentifier}]";
         }
     }
 }

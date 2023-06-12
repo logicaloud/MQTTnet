@@ -4,6 +4,7 @@
 
 using System;
 using System.Text;
+using MQTTnet.Internal;
 
 namespace MQTTnet
 {
@@ -11,19 +12,23 @@ namespace MQTTnet
     {
         public static string ConvertPayloadToString(this MqttApplicationMessage applicationMessage)
         {
-            if (applicationMessage == null) throw new ArgumentNullException(nameof(applicationMessage));
+            if (applicationMessage == null)
+            {
+                throw new ArgumentNullException(nameof(applicationMessage));
+            }
 
-            if (applicationMessage.Payload == null)
+            if(applicationMessage.PayloadSegment == EmptyBuffer.ArraySegment)
             {
                 return null;
             }
 
-            if (applicationMessage.Payload.Length == 0)
+            if (applicationMessage.PayloadSegment.Array == null)
             {
-                return string.Empty;
+                return null;
             }
 
-            return Encoding.UTF8.GetString(applicationMessage.Payload, 0, applicationMessage.Payload.Length);
+            var payloadSegment = applicationMessage.PayloadSegment;
+            return Encoding.UTF8.GetString(payloadSegment.Array, payloadSegment.Offset, payloadSegment.Count);
         }
     }
 }

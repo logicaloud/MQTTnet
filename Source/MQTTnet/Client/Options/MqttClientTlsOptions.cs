@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Net.Security;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 
@@ -29,13 +30,23 @@ namespace MQTTnet.Client
         public List<X509Certificate> Certificates { get; set; }
 #endif
 
-#if NETCOREAPP3_1 || NET5_0_OR_GREATER
-        public List<System.Net.Security.SslApplicationProtocol> ApplicationProtocols { get; set; }
-        
-        public System.Net.Security.CipherSuitesPolicy CipherSuitesPolicy { get; set; }
+#if NETCOREAPP3_1_OR_GREATER
+        public List<SslApplicationProtocol> ApplicationProtocols { get; set; }
+
+        public CipherSuitesPolicy CipherSuitesPolicy { get; set; }
+
+        public EncryptionPolicy EncryptionPolicy { get; set; } = EncryptionPolicy.RequireEncryption;
+
+        public bool AllowRenegotiation { get; set; } = true;
 #endif
 
-#if NET48 || NETCOREAPP3_1 || NET5 || NET6
+        /// <summary>
+        ///     Gets or sets the target host.
+        ///     If the value is null or empty the same host as the TCP socket host will be used.
+        /// </summary>
+        public string TargetHost { get; set; }
+
+#if NET48 || NETCOREAPP3_1_OR_GREATER
         public SslProtocols SslProtocol { get; set; } = SslProtocols.Tls12 | SslProtocols.Tls13;
 #else
         public SslProtocols SslProtocol { get; set; } = SslProtocols.Tls12 | (SslProtocols)0x00003000 /*Tls13*/;

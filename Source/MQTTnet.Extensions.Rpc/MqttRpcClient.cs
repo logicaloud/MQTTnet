@@ -4,10 +4,12 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MQTTnet.Client;
 using MQTTnet.Exceptions;
+using MQTTnet.Formatter;
 using MQTTnet.Internal;
 using MQTTnet.Protocol;
 
@@ -17,9 +19,9 @@ namespace MQTTnet.Extensions.Rpc
     {
         readonly IMqttClient _mqttClient;
         readonly MqttRpcClientOptions _options;
-        
+
         readonly ConcurrentDictionary<string, AsyncTaskCompletionSource<byte[]>> _waitingCalls = new ConcurrentDictionary<string, AsyncTaskCompletionSource<byte[]>>();
-        
+
         public MqttRpcClient(IMqttClient mqttClient, MqttRpcClientOptions options)
         {
             _mqttClient = mqttClient ?? throw new ArgumentNullException(nameof(mqttClient));
@@ -83,11 +85,14 @@ namespace MQTTnet.Extensions.Rpc
                 throw new MqttProtocolViolationException("RPC response topic is empty.");
             }
 
-            var requestMessage = new MqttApplicationMessageBuilder().WithTopic(requestTopic)
-                .WithPayload(payload)
-                .WithQualityOfServiceLevel(qualityOfServiceLevel)
-                .WithResponseTopic(responseTopic)
-                .Build();
+            var requestMessageBuilder = new MqttApplicationMessageBuilder().WithTopic(requestTopic).WithPayload(payload).WithQualityOfServiceLevel(qualityOfServiceLevel);
+
+            if (_mqttClient.Options.ProtocolVersion == MqttProtocolVersion.V500)
+            {
+                requestMessageBuilder.WithResponseTopic(responseTopic);
+            }
+
+            var requestMessage = requestMessageBuilder.Build();
 
             try
             {
@@ -115,7 +120,6 @@ namespace MQTTnet.Extensions.Rpc
             finally
             {
                 _waitingCalls.TryRemove(responseTopic, out _);
-
                 await _mqttClient.UnsubscribeAsync(responseTopic, CancellationToken.None).ConfigureAwait(false);
             }
         }
@@ -127,7 +131,8 @@ namespace MQTTnet.Extensions.Rpc
                 return CompletedTask.Instance;
             }
 
-            awaitable.TrySetResult(eventArgs.ApplicationMessage.Payload);
+            var payloadBuffer = eventArgs.ApplicationMessage.PayloadSegment.ToArray();
+            awaitable.TrySetResult(payloadBuffer);
 
             // Set this message to handled to that other code can avoid execution etc.
             eventArgs.IsHandled = true;

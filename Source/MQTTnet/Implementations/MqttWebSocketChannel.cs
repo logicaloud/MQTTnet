@@ -63,7 +63,7 @@ namespace MQTTnet.Implementations
 
                 await clientWebSocket.ConnectAsync(new Uri(uri), cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception)
+            catch
             {
                 // Prevent a memory leak when always creating new instance which will fail while connecting.
                 clientWebSocket.Dispose();
@@ -103,7 +103,7 @@ namespace MQTTnet.Implementations
         public async Task WriteAsync(ArraySegment<byte> buffer, bool isEndOfPacket, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            
+
 #if NET5_0_OR_GREATER
             // MQTT Control Packets MUST be sent in WebSocket binary data frames. If any other type of data frame is received the recipient MUST close the Network Connection [MQTT-6.0.0-1].
             // A single WebSocket data frame can contain multiple or partial MQTT Control Packets. The receiver MUST NOT assume that MQTT Control Packets are aligned on WebSocket frame boundaries [MQTT-6.0.0-2].
@@ -155,14 +155,26 @@ namespace MQTTnet.Implementations
             throw new NotSupportedException("Proxies are not supported when using 'netstandard 1.3'.");
 #else
             var proxyUri = new Uri(_options.ProxyOptions.Address);
-
+            WebProxy webProxy;
+            
             if (!string.IsNullOrEmpty(_options.ProxyOptions.Username) && !string.IsNullOrEmpty(_options.ProxyOptions.Password))
             {
                 var credentials = new NetworkCredential(_options.ProxyOptions.Username, _options.ProxyOptions.Password, _options.ProxyOptions.Domain);
-                return new WebProxy(proxyUri, _options.ProxyOptions.BypassOnLocal, _options.ProxyOptions.BypassList, credentials);
+                webProxy = new WebProxy(proxyUri, _options.ProxyOptions.BypassOnLocal, _options.ProxyOptions.BypassList, credentials);
+            }
+            else
+            {
+                webProxy = new WebProxy(proxyUri, _options.ProxyOptions.BypassOnLocal, _options.ProxyOptions.BypassList);    
+            }
+            
+            if (_options.ProxyOptions.UseDefaultCredentials)
+            {
+                // Only update the property if required because setting it to false will alter
+                // the used credentials internally!
+                webProxy.UseDefaultCredentials = true;
             }
 
-            return new WebProxy(proxyUri, _options.ProxyOptions.BypassOnLocal, _options.ProxyOptions.BypassList);
+            return webProxy;
 #endif
         }
 
@@ -207,6 +219,14 @@ namespace MQTTnet.Implementations
                 }
             }
 
+#if !NETSTANDARD1_3
+#if !WINDOWS_UWP
+            clientWebSocket.Options.UseDefaultCredentials = _options.UseDefaultCredentials;
+#endif
+            clientWebSocket.Options.KeepAliveInterval = _options.KeepAliveInterval;
+#endif
+            clientWebSocket.Options.Credentials = _options.Credentials;
+            
             var certificateValidationHandler = _options.TlsOptions?.CertificateValidationHandler;
             if (certificateValidationHandler != null)
             {
@@ -220,6 +240,8 @@ namespace MQTTnet.Implementations
                 throw new NotSupportedException("Remote certificate validation callback is not supported when using 'net452'.");
 #elif NET461
                 throw new NotSupportedException("Remote certificate validation callback is not supported when using 'net461'.");
+#elif NET48
+                throw new NotSupportedException("Remote certificate validation callback is not supported when using 'net48'.");
 #else
                 clientWebSocket.Options.RemoteCertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) =>
                 {

@@ -17,11 +17,43 @@ using MQTTnet.Protocol;
 using MQTTnet.Server;
 using MQTTnet.Tests.Mockups;
 
-namespace MQTTnet.Tests.Client
+namespace MQTTnet.Tests.Clients.ManagedMqttClient
 {
     [TestClass]
     public sealed class ManagedMqttClient_Tests : BaseTestClass
     {
+        [TestMethod]
+        public async Task Expose_Custom_Connection_Error()
+        {
+            using (var testEnvironment = CreateTestEnvironment())
+            {
+                var server = await testEnvironment.StartServer();
+                
+                server.ValidatingConnectionAsync += args =>
+                {
+                    args.ReasonCode = MqttConnectReasonCode.BadUserNameOrPassword;
+                    return CompletedTask.Instance;
+                };
+
+                var managedClient = testEnvironment.Factory.CreateManagedMqttClient();
+
+                MqttClientDisconnectedEventArgs disconnectedArgs = null;
+                managedClient.DisconnectedAsync += args =>
+                {
+                    disconnectedArgs = args;
+                    return CompletedTask.Instance;
+                };
+                
+                var clientOptions = testEnvironment.Factory.CreateManagedMqttClientOptionsBuilder().WithClientOptions(testEnvironment.CreateDefaultClientOptions()).Build();
+                await managedClient.StartAsync(clientOptions);
+
+                await LongTestDelay();
+
+                Assert.IsNotNull(disconnectedArgs);
+                Assert.AreEqual(MqttClientConnectResultCode.BadUserNameOrPassword, disconnectedArgs.ConnectResult.ResultCode);
+            }
+        }
+        
         [TestMethod]
         public async Task Receive_While_Not_Cleanly_Disconnected()
         {
@@ -164,7 +196,7 @@ namespace MQTTnet.Tests.Client
                     .Build();
 
                 var dyingClient = testEnvironment.CreateClient();
-                var dyingManagedClient = new ManagedMqttClient(dyingClient, testEnvironment.ClientLogger);
+                var dyingManagedClient = new MQTTnet.Extensions.ManagedClient.ManagedMqttClient(dyingClient, testEnvironment.ClientLogger);
 
                 await dyingManagedClient.StartAsync(new ManagedMqttClientOptionsBuilder().WithClientOptions(clientOptions).Build());
 
@@ -199,7 +231,7 @@ namespace MQTTnet.Tests.Client
             {
                 var server = await testEnvironment.StartServer();
 
-                var managedClient = new ManagedMqttClient(testEnvironment.CreateClient(), new MqttNetEventLogger());
+                var managedClient = new MQTTnet.Extensions.ManagedClient.ManagedMqttClient(testEnvironment.CreateClient(), new MqttNetEventLogger());
                 var clientOptions = new MqttClientOptionsBuilder().WithTcpServer("localhost", testEnvironment.ServerPort);
 
                 var connected = GetConnectedTask(managedClient);
@@ -226,7 +258,7 @@ namespace MQTTnet.Tests.Client
 
                 await testEnvironment.StartServer();
 
-                var managedClient = new ManagedMqttClient(testEnvironment.CreateClient(), new MqttNetEventLogger());
+                var managedClient = new MQTTnet.Extensions.ManagedClient.ManagedMqttClient(testEnvironment.CreateClient(), new MqttNetEventLogger());
                 var clientOptions = new MqttClientOptionsBuilder().WithTcpServer("localhost", testEnvironment.ServerPort);
                 var storage = new ManagedMqttClientTestStorage();
 
@@ -439,7 +471,7 @@ namespace MQTTnet.Tests.Client
             }
         }
 
-        async Task<ManagedMqttClient> CreateManagedClientAsync(
+        async Task<MQTTnet.Extensions.ManagedClient.ManagedMqttClient> CreateManagedClientAsync(
             TestEnvironment testEnvironment,
             IMqttClient underlyingClient = null,
             TimeSpan? connectionCheckInterval = null,
@@ -456,7 +488,7 @@ namespace MQTTnet.Tests.Client
             // at connection check intervals
             managedOptions.ConnectionCheckInterval = connectionCheckInterval ?? TimeSpan.FromSeconds(0.1);
 
-            var managedClient = new ManagedMqttClient(underlyingClient ?? testEnvironment.CreateClient(), new MqttNetEventLogger());
+            var managedClient = new MQTTnet.Extensions.ManagedClient.ManagedMqttClient(underlyingClient ?? testEnvironment.CreateClient(), new MqttNetEventLogger());
 
             var connected = GetConnectedTask(managedClient);
 
@@ -473,7 +505,7 @@ namespace MQTTnet.Tests.Client
         ///         name="managedClient" />
         ///     has connected
         /// </summary>
-        Task GetConnectedTask(ManagedMqttClient managedClient)
+        Task GetConnectedTask(MQTTnet.Extensions.ManagedClient.ManagedMqttClient managedClient)
         {
             var connected = new TaskCompletionSource<bool>();
 
@@ -495,7 +527,7 @@ namespace MQTTnet.Tests.Client
         ///         name="expectedNumberOfMessages" />
         ///     have been received
         /// </summary>
-        Task<List<MqttApplicationMessage>> SetupReceivingOfMessages(ManagedMqttClient managedClient, int expectedNumberOfMessages)
+        Task<List<MqttApplicationMessage>> SetupReceivingOfMessages(MQTTnet.Extensions.ManagedClient.ManagedMqttClient managedClient, int expectedNumberOfMessages)
         {
             var receivedMessages = new List<MqttApplicationMessage>();
             var result = new AsyncTaskCompletionSource<List<MqttApplicationMessage>>();

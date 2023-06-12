@@ -32,7 +32,7 @@ namespace MQTTnet.Server
         readonly Dictionary<string, MqttSubscription> _subscriptions = new Dictionary<string, MqttSubscription>();
 
         // Use subscription lock to maintain consistency across subscriptions and topic hash dictionaries
-        readonly AsyncLock _subscriptionsLock = new AsyncLock();
+        readonly ReaderWriterLockSlim _subscriptionsLock = new ReaderWriterLockSlim();
         readonly Dictionary<ulong, TopicHashMaskSubscriptions> _wildcardSubscriptionsByTopicHash = new Dictionary<ulong, TopicHashMaskSubscriptions>();
 
         // statistics
@@ -59,11 +59,12 @@ namespace MQTTnet.Server
             var possibleSubscriptions = new List<MqttSubscription>();
 
             // Check for possible subscriptions. They might have collisions but this is fine.
-            using (_subscriptionsLock.EnterAsync(CancellationToken.None).GetAwaiter().GetResult())
+            _subscriptionsLock.EnterReadLock();
+            try
             {
                 if (_noWildcardSubscriptionsByTopicHash.TryGetValue(topicHash, out var noWildcardSubscriptions))
                 {
-                    possibleSubscriptions.AddRange(noWildcardSubscriptions.ToList());
+                    possibleSubscriptions.AddRange(noWildcardSubscriptions);
                 }
 
                 foreach (var wcs in _wildcardSubscriptionsByTopicHash)
@@ -76,10 +77,14 @@ namespace MQTTnet.Server
                         if ((topicHash & subscriptionHashMask) == subscriptionHash)
                         {
                             var subscriptions = shm.Value;
-                            possibleSubscriptions.AddRange(subscriptions.ToList());
+                            possibleSubscriptions.AddRange(subscriptions);
                         }
                     }
                 }
+            }
+            finally
+            {
+                _subscriptionsLock.ExitReadLock();
             }
 
             // The pre check has evaluated that nothing is subscribed.
@@ -165,7 +170,10 @@ namespace MQTTnet.Server
 
         public void Dispose()
         {
-            _subscriptionsLock.Dispose();
+            if (_subscriptionsLock != null)
+            {
+                _subscriptionsLock.Dispose();
+            }
         }
 
         public async Task<SubscribeResult> Subscribe(MqttSubscribePacket subscribePacket, CancellationToken cancellationToken)
@@ -185,15 +193,15 @@ namespace MQTTnet.Server
             // lower one.
             foreach (var topicFilterItem in subscribePacket.TopicFilters.OrderByDescending(f => f.QualityOfServiceLevel))
             {
-                var subscriptionEventArgs = await InterceptSubscribe(topicFilterItem, cancellationToken).ConfigureAwait(false);
-                var topicFilter = subscriptionEventArgs.TopicFilter;
-                var processSubscription = subscriptionEventArgs.ProcessSubscription && subscriptionEventArgs.Response.ReasonCode <= MqttSubscribeReasonCode.GrantedQoS2;
+                var interceptorEventArgs = await InterceptSubscribe(topicFilterItem, subscribePacket.UserProperties, cancellationToken).ConfigureAwait(false);
+                var topicFilter = interceptorEventArgs.TopicFilter;
+                var processSubscription = interceptorEventArgs.ProcessSubscription && interceptorEventArgs.Response.ReasonCode <= MqttSubscribeReasonCode.GrantedQoS2;
 
-                result.UserProperties = subscriptionEventArgs.UserProperties;
-                result.ReasonString = subscriptionEventArgs.ReasonString;
-                result.ReasonCodes.Add(subscriptionEventArgs.Response.ReasonCode);
+                result.UserProperties = interceptorEventArgs.UserProperties;
+                result.ReasonString = interceptorEventArgs.ReasonString;
+                result.ReasonCodes.Add(interceptorEventArgs.Response.ReasonCode);
 
-                if (subscriptionEventArgs.CloseConnection)
+                if (interceptorEventArgs.CloseConnection)
                 {
                     // When any of the interceptor calls leads to a connection close the connection
                     // must be closed. So do not revert to false!
@@ -211,7 +219,7 @@ namespace MQTTnet.Server
                     await _persistedSessionManager.AddOrUpdateSubscriptionAsync(_session.Id, topicFilter).ConfigureAwait(false);
                 }
 
-                var createSubscriptionResult = CreateSubscription(topicFilter, subscribePacket.SubscriptionIdentifier, subscriptionEventArgs.Response.ReasonCode);
+                var createSubscriptionResult = CreateSubscription(topicFilter, subscribePacket.SubscriptionIdentifier, interceptorEventArgs.Response.ReasonCode);
 
                 addedSubscriptions.Add(topicFilter.Topic);
                 finalTopicFilters.Add(topicFilter);
@@ -246,18 +254,20 @@ namespace MQTTnet.Server
 
             var removedSubscriptions = new List<string>();
 
-            using (await _subscriptionsLock.EnterAsync(cancellationToken).ConfigureAwait(false))
+            _subscriptionsLock.EnterWriteLock();
+            try
             {
                 foreach (var topicFilter in unsubscribePacket.TopicFilters)
                 {
                     _subscriptions.TryGetValue(topicFilter, out var existingSubscription);
 
-                    var interceptorContext = await InterceptUnsubscribe(topicFilter, existingSubscription, cancellationToken).ConfigureAwait(false);
-                    var acceptUnsubscription = interceptorContext.Response.ReasonCode == MqttUnsubscribeReasonCode.Success;
+                    var interceptorEventArgs = await InterceptUnsubscribe(topicFilter, existingSubscription, unsubscribePacket.UserProperties, cancellationToken).ConfigureAwait(false);
+                    var acceptUnsubscription = interceptorEventArgs.Response.ReasonCode == MqttUnsubscribeReasonCode.Success;
 
-                    result.ReasonCodes.Add(interceptorContext.Response.ReasonCode);
+                    result.UserProperties = interceptorEventArgs.UserProperties;
+                    result.ReasonCodes.Add(interceptorEventArgs.Response.ReasonCode);
 
-                    if (interceptorContext.CloseConnection)
+                    if (interceptorEventArgs.CloseConnection)
                     {
                         // When any of the interceptor calls leads to a connection close the connection
                         // must be closed. So do not revert to false!
@@ -269,7 +279,7 @@ namespace MQTTnet.Server
                         continue;
                     }
 
-                    if (interceptorContext.ProcessUnsubscription)
+                    if (interceptorEventArgs.ProcessUnsubscription)
                     {
                         if (_subscriptions.Remove(topicFilter))
                         {
@@ -316,8 +326,11 @@ namespace MQTTnet.Server
                     }
                 }
             }
-
-            _subscriptionChangedNotification?.OnSubscriptionsRemoved(_session, removedSubscriptions);
+            finally
+            {
+                _subscriptionsLock.ExitWriteLock();
+                _subscriptionChangedNotification?.OnSubscriptionsRemoved(_session, removedSubscriptions);
+            }
 
             if (_eventContainer.ClientUnsubscribedTopicEvent.HasHandlers)
             {
@@ -364,9 +377,10 @@ namespace MQTTnet.Server
 
             // Add to subscriptions and maintain topic hash dictionaries
 
-            using (_subscriptionsLock.EnterAsync(CancellationToken.None).GetAwaiter().GetResult())
+            _subscriptionsLock.EnterWriteLock();
+            try
             {
-                MqttSubscription.CalculateTopicHash(topicFilter.Topic, out var topicHash, out var topicHashMask, out var hasWildcard);
+                MqttTopicHash.Calculate(topicFilter.Topic, out var topicHash, out _, out var hasWildcard);
 
                 if (_subscriptions.TryGetValue(topicFilter.Topic, out var existingSubscription))
                 {
@@ -419,6 +433,10 @@ namespace MQTTnet.Server
                     subscriptions.Add(subscription);
                 }
             }
+            finally
+            {
+                _subscriptionsLock.ExitWriteLock();
+            }
 
             return new CreateSubscriptionResult
             {
@@ -432,23 +450,23 @@ namespace MQTTnet.Server
             CreateSubscriptionResult createSubscriptionResult,
             SubscribeResult subscribeResult)
         {
+            if (createSubscriptionResult.Subscription.RetainHandling == MqttRetainHandling.DoNotSendOnSubscribe)
+            {
+                // This is a MQTT V5+ feature.
+                return;
+            }
+
+            if (createSubscriptionResult.Subscription.RetainHandling == MqttRetainHandling.SendAtSubscribeIfNewSubscriptionOnly && !createSubscriptionResult.IsNewSubscription)
+            {
+                // This is a MQTT V5+ feature.
+                return;
+            }
+
             for (var index = retainedMessages.Count - 1; index >= 0; index--)
             {
                 var retainedMessage = retainedMessages[index];
                 if (retainedMessage == null)
                 {
-                    continue;
-                }
-
-                if (createSubscriptionResult.Subscription.RetainHandling == MqttRetainHandling.DoNotSendOnSubscribe)
-                {
-                    // This is a MQTT V5+ feature.
-                    continue;
-                }
-
-                if (createSubscriptionResult.Subscription.RetainHandling == MqttRetainHandling.SendAtSubscribeIfNewSubscriptionOnly && !createSubscriptionResult.IsNewSubscription)
-                {
-                    // This is a MQTT V5+ feature.
                     continue;
                 }
 
@@ -481,9 +499,12 @@ namespace MQTTnet.Server
             }
         }
 
-        async Task<InterceptingSubscriptionEventArgs> InterceptSubscribe(MqttTopicFilter topicFilter, CancellationToken cancellationToken)
+        async Task<InterceptingSubscriptionEventArgs> InterceptSubscribe(
+            MqttTopicFilter topicFilter,
+            List<MqttUserProperty> userProperties,
+            CancellationToken cancellationToken)
         {
-            var eventArgs = new InterceptingSubscriptionEventArgs(cancellationToken, _session.Id, new MqttSessionStatus(_session), topicFilter);
+            var eventArgs = new InterceptingSubscriptionEventArgs(cancellationToken, _session.Id, new MqttSessionStatus(_session), topicFilter, userProperties);
 
             if (topicFilter.QualityOfServiceLevel == MqttQualityOfServiceLevel.AtMostOnce)
             {
@@ -510,9 +531,13 @@ namespace MQTTnet.Server
             return eventArgs;
         }
 
-        async Task<InterceptingUnsubscriptionEventArgs> InterceptUnsubscribe(string topicFilter, MqttSubscription mqttSubscription, CancellationToken cancellationToken)
+        async Task<InterceptingUnsubscriptionEventArgs> InterceptUnsubscribe(
+            string topicFilter,
+            MqttSubscription mqttSubscription,
+            List<MqttUserProperty> userProperties,
+            CancellationToken cancellationToken)
         {
-            var clientUnsubscribingTopicEventArgs = new InterceptingUnsubscriptionEventArgs(cancellationToken, topicFilter, _session.Items, topicFilter)
+            var clientUnsubscribingTopicEventArgs = new InterceptingUnsubscriptionEventArgs(cancellationToken, _session.Id, _session.Items, topicFilter, userProperties)
             {
                 Response =
                 {
