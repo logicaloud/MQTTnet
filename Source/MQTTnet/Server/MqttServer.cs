@@ -318,7 +318,7 @@ namespace MQTTnet.Server
 
             ThrowIfNotStarted();
 
-            return _retainedMessagesManager.GetMessagesAsync(topic);
+            return _retainedMessagesManager.GetMessageAsync(topic);
         }
 
         public Task<IList<MqttSessionStatus>> GetSessionsAsync()

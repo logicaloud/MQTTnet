@@ -155,7 +155,7 @@ namespace MQTTnet.Server
             }
         }
 
-        public Task<MqttApplicationMessage> GetMessagesAsync(string topic)
+        public Task<MqttApplicationMessage> GetMessageAsync(string topic)
         {
             lock (_messages)
             {
@@ -163,11 +163,10 @@ namespace MQTTnet.Server
                 {
                     return Task.FromResult(message);
                 }
-
-                return Task.FromResult<MqttApplicationMessage>(null);
             }
-        }
 
+            return Task.FromResult<MqttApplicationMessage>(null);
+        }
 
         public async Task ClearMessagesAsync()
         {

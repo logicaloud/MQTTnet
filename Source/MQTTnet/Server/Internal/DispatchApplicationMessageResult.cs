@@ -9,16 +9,13 @@ namespace MQTTnet.Server
 {
     public sealed class DispatchApplicationMessageResult
     {
-        public DispatchApplicationMessageResult(int matchingSubscriberCount, int reasonCode, bool closeConnection, string reasonString, List<MqttUserProperty> userProperties)
+        public DispatchApplicationMessageResult(int reasonCode, bool closeConnection, string reasonString, List<MqttUserProperty> userProperties)
         {
-            MatchingSubscriberCount = matchingSubscriberCount;
             ReasonCode = reasonCode;
             CloseConnection = closeConnection;
             ReasonString = reasonString;
             UserProperties = userProperties;
         }
-
-        public int MatchingSubscriberCount { get; }
 
         public bool CloseConnection { get; }
 

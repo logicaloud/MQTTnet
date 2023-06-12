@@ -13,7 +13,7 @@ namespace MQTTnet.Server
 {
     public sealed class ClientConnectedEventArgs : EventArgs
     {
-        public ClientConnectedEventArgs(MqttConnectPacket connectPacket, X509Certificate2 clientCertificate, MqttProtocolVersion protocolVersion, string endpoint, IDictionary sessionItems)
+        public ClientConnectedEventArgs(MqttConnectPacket connectPacket,X509Certificate2 clientCertificate,  MqttProtocolVersion protocolVersion, string endpoint, IDictionary sessionItems)
         {
             _connectPacket = connectPacket ?? throw new ArgumentNullException(nameof(connectPacket));
             ClientCertificate = clientCertificate;

@@ -16,7 +16,7 @@ namespace MQTTnet.Server
             _receivedPacketsCount = 1,
 
             // Start with 1 because the CONNECT packet is not counted here.
-            _sentPacketsCount = 1,
+            _sentPacketsCount = 1
         };
 
         static long _totalNumMessagesReceived;

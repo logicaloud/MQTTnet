@@ -440,7 +440,6 @@ namespace MQTTnet.Server
                     else if (currentPacket is MqttDisconnectPacket disconnectPacket)
                     {
                         HandleIncomingDisconnectPacket(currentPacket as MqttDisconnectPacket);
-                        return;
                     }
                     else
                     {
@@ -601,8 +600,7 @@ namespace MQTTnet.Server
                  * Non-normative comment
                  * The Client can arrange for the Will Message to notify that Session Expiry has occurred by setting the Will Delay Interval to be 
                  * longer than the Session Expiry Interval and sending DISCONNECT with Reason Code 0x04 (Disconnect with Will Message).
-                 */
-                
+                 */               
             }
         }
 

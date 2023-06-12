@@ -368,7 +368,7 @@ namespace MQTTnet.Server
                 }
             }
 
-            return new DispatchApplicationMessageResult(matchingSubscribersCount, reasonCode, closeConnection, reasonString, userProperties);
+            return new DispatchApplicationMessageResult(reasonCode, closeConnection, reasonString, userProperties);
         }
 
         public void Dispose()
