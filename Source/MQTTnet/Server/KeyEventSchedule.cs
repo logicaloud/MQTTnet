@@ -20,14 +20,16 @@ namespace MQTTnet
         object _lock;
         SortedSet<KeyEvent<TEventKey, TEventArgs>> _eventQueue;
         Dictionary<TEventKey, KeyEvent<TEventKey, TEventArgs>> _eventDictionary;
+        TimeTickSource _timeTicks;
         int _sequenceCounter;
-        DateTime _lastEventTime;
+        long _lastEventTimeTick;
         ProcessEventAsyncDelegate _onProcessEvent;
         CancellationTokenSource _cancelWaitTokenSource;
         volatile bool _disposed;
 
         public KeyEventSchedule(ProcessEventAsyncDelegate onProcessEvent, CancellationToken cancellationToken)
         {
+            _timeTicks = new TimeTickSource();
             _onProcessEvent = onProcessEvent;
             _lock = new object();
             _cancelWaitTokenSource = new CancellationTokenSource();
@@ -54,16 +56,16 @@ namespace MQTTnet
         /// <returns></returns>
         public void AddOrUpdateEvent(uint intervalInSeconds, TEventKey key, TEventArgs args)
         {
-            var eventTime = DateTime.UtcNow.AddSeconds(intervalInSeconds);
+            var eventTimeTick = _timeTicks.Now + intervalInSeconds * 1000;
             var nextSeqNo = 0;
             KeyEvent<TEventKey, TEventArgs> keyEvent;
             lock (_lock)
             {
-                if (_lastEventTime != eventTime)
+                if (_lastEventTimeTick != eventTimeTick)
                 {
                     // Can reset sequence counter while still retaining original sequence
                     // of events even when there have been multiple events with the same timestamp.
-                    _lastEventTime = eventTime;
+                    _lastEventTimeTick = eventTimeTick;
                     _sequenceCounter = 0;
                 }
                 else
@@ -78,18 +80,18 @@ namespace MQTTnet
                     _eventDictionary.Remove(key);
                 }
 
-                keyEvent = new KeyEvent<TEventKey, TEventArgs>(eventTime, nextSeqNo, key, args);
-                DateTime prevFirstEventTime = DateTime.MinValue;
+                keyEvent = new KeyEvent<TEventKey, TEventArgs>(eventTimeTick, nextSeqNo, key, args);
+                long prevFirstEventTimeTick = Int64.MaxValue;
                 if (_eventQueue.Count > 0)
                 {
-                    prevFirstEventTime = _eventQueue.Min.EventTime;
+                    prevFirstEventTimeTick = _eventQueue.Min.EventTimeTick;
                 }
                 _eventQueue.Add(keyEvent); 
                 _eventDictionary.Add(key, keyEvent);
 
                 // Wake up task if this was the first event queued or if the first event time has changed,
                 // otherwise cancellation can be avoided since the task is already waiting for the correct time.
-                if (prevFirstEventTime != _eventQueue.Min.EventTime)
+                if (prevFirstEventTimeTick != _eventQueue.Min.EventTimeTick)
                 {
                     _cancelWaitTokenSource.Cancel();
                 }
@@ -127,7 +129,7 @@ namespace MQTTnet
                         if (_eventQueue.Count > 0)
                         {
                             nextEvent = _eventQueue.Min;
-                            isDue = nextEvent.EventTime <= DateTime.UtcNow;
+                            isDue = nextEvent.EventTimeTick <= _timeTicks.Now;
                             if (isDue)
                             {
                                 _eventQueue.Remove(nextEvent);
@@ -154,8 +156,13 @@ namespace MQTTnet
                         {
                             if (nextEvent != null)
                             {
-                                var delay = nextEvent.EventTime - DateTime.UtcNow;
-                                await Task.Delay(delay, _cancelWaitTokenSource.Token).ConfigureAwait(false);
+                                var delay = nextEvent.EventTimeTick - _timeTicks.Now;
+                                if (delay >= int.MaxValue)
+                                {
+                                    // delay is longer than can be waited for with Task Delay; limit wait time.
+                                    delay = int.MaxValue/2;
+                                }
+                                await Task.Delay((int)delay, _cancelWaitTokenSource.Token).ConfigureAwait(false);
                             }
                             else
                             {
