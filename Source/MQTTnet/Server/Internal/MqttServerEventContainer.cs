@@ -48,5 +48,13 @@ namespace MQTTnet.Server
         public AsyncEvent<EventArgs> StoppedEvent { get; } = new AsyncEvent<EventArgs>();
 
         public AsyncEvent<ValidatingConnectionEventArgs> ValidatingConnectionEvent { get; } = new AsyncEvent<ValidatingConnectionEventArgs>();
+
+        // Retained message handling intercepts
+        public AsyncEvent<InterceptingRetainedMessagesFetchEventArgs> InterceptingRetainedMessagesFetchEvent { get; } = new AsyncEvent<InterceptingRetainedMessagesFetchEventArgs>();
+        public AsyncEvent<InterceptingRetainedMessagesFilterEventArgs> InterceptingFilterRetainedMessagesEvent { get; } = new AsyncEvent<InterceptingRetainedMessagesFilterEventArgs>();
+        public AsyncEvent<InterceptingRetainedMessageAddedOrUpdatedEventArgs> InterceptingRetainedMessageAddedOrUpdatedEvent { get; } = new AsyncEvent<InterceptingRetainedMessageAddedOrUpdatedEventArgs>();
+        public AsyncEvent<InterceptingRetainedMessageRemovedEventArgs> InterceptingRetainedMessageRemovedEvent { get; } = new AsyncEvent<InterceptingRetainedMessageRemovedEventArgs>();
+        public AsyncEvent<InterceptingRetainedMessagesClearedEventArgs> InterceptingRetainedMessagesClearedEvent { get; } = new AsyncEvent<InterceptingRetainedMessagesClearedEventArgs>();
+        public AsyncEvent<InterceptingRetainedMessagesFilterEventArgs> InterceptingRetainedMessagesFilterEvent { get; } = new AsyncEvent<InterceptingRetainedMessagesFilterEventArgs>();
     }
 }

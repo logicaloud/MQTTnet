@@ -175,7 +175,6 @@ namespace MQTTnet.Server
                 throw new ArgumentNullException(nameof(subscribePacket));
             }
 
-            var retainedApplicationMessages = await _retainedMessagesManager.GetMessages().ConfigureAwait(false);
             var result = new SubscribeResult(subscribePacket.TopicFilters.Count);
 
             var addedSubscriptions = new List<string>();
@@ -210,7 +209,15 @@ namespace MQTTnet.Server
                 addedSubscriptions.Add(topicFilter.Topic);
                 finalTopicFilters.Add(topicFilter);
 
-                FilterRetainedApplicationMessages(retainedApplicationMessages, createSubscriptionResult, result);
+                var retainedMessages = await FilterRetainedApplicationMessages(createSubscriptionResult).ConfigureAwait(false);
+                if (retainedMessages != null)
+                {
+                    if (result.RetainedMessages == null)
+                    {
+                        result.RetainedMessages = new List<MqttRetainedMessageMatch>();
+                    }
+                    result.RetainedMessages.AddRange(retainedMessages);
+                }
             }
 
             // This call will add the new subscription to the internal storage.
@@ -416,22 +423,32 @@ namespace MQTTnet.Server
             };
         }
 
-        static void FilterRetainedApplicationMessages(
-            IList<MqttApplicationMessage> retainedMessages,
-            CreateSubscriptionResult createSubscriptionResult,
-            SubscribeResult subscribeResult)
+        async Task<IEnumerable<MqttRetainedMessageMatch>> FilterRetainedApplicationMessages(
+            CreateSubscriptionResult createSubscriptionResult
+            )
         {
             if (createSubscriptionResult.Subscription.RetainHandling == MqttRetainHandling.DoNotSendOnSubscribe)
             {
                 // This is a MQTT V5+ feature.
-                return;
+                return null;
             }
 
             if (createSubscriptionResult.Subscription.RetainHandling == MqttRetainHandling.SendAtSubscribeIfNewSubscriptionOnly && !createSubscriptionResult.IsNewSubscription)
             {
                 // This is a MQTT V5+ feature.
-                return;
+                return null;
             }
+
+            if (_eventContainer.InterceptingFilterRetainedMessagesEvent.HasHandlers)
+            {
+                var eventArgs = new InterceptingRetainedMessagesFilterEventArgs(createSubscriptionResult.Subscription.Topic, createSubscriptionResult.Subscription.GrantedQualityOfServiceLevel);
+                await _eventContainer.InterceptingFilterRetainedMessagesEvent.InvokeAsync(eventArgs).ConfigureAwait(false);
+                return eventArgs.FilteredMessages;
+            }
+
+            var retainedMessages = await _retainedMessagesManager.GetMessages();
+
+            var matchingRetainedMessages = new List<MqttRetainedMessageMatch>();
 
             for (var index = retainedMessages.Count - 1; index >= 0; index--)
             {
@@ -446,28 +463,33 @@ namespace MQTTnet.Server
                     continue;
                 }
 
-                var retainedMessageMatch = new MqttRetainedMessageMatch(retainedMessage, createSubscriptionResult.Subscription.GrantedQualityOfServiceLevel);
-                if (retainedMessageMatch.SubscriptionQualityOfServiceLevel > retainedMessageMatch.ApplicationMessage.QualityOfServiceLevel)
-                {
-                    // UPGRADING the QoS is not allowed! 
-                    // From MQTT spec: Subscribing to a Topic Filter at QoS 2 is equivalent to saying
-                    // "I would like to receive Messages matching this filter at the QoS with which they were published".
-                    // This means a publisher is responsible for determining the maximum QoS a Message can be delivered at,
-                    // but a subscriber is able to require that the Server downgrades the QoS to one more suitable for its usage.
-                    retainedMessageMatch.SubscriptionQualityOfServiceLevel = retainedMessageMatch.ApplicationMessage.QualityOfServiceLevel;
-                }
+                var matchingMessage = CreateMatchingRetainedMessage(retainedMessage, createSubscriptionResult.Subscription.GrantedQualityOfServiceLevel);
 
-                if (subscribeResult.RetainedMessages == null)
-                {
-                    subscribeResult.RetainedMessages = new List<MqttRetainedMessageMatch>();
-                }
-
-                subscribeResult.RetainedMessages.Add(retainedMessageMatch);
+                matchingRetainedMessages.Add(matchingMessage);
 
                 // Clear the retained message from the list because the client should receive every message only 
                 // one time even if multiple subscriptions affect them.
                 retainedMessages[index] = null;
             }
+
+            return matchingRetainedMessages;
+        }
+    
+
+        public static MqttRetainedMessageMatch CreateMatchingRetainedMessage(MqttApplicationMessage retainedMessage, MqttQualityOfServiceLevel grantedQualityOfServiceLevel)
+        {
+            var retainedMessageMatch = new MqttRetainedMessageMatch(retainedMessage, grantedQualityOfServiceLevel);
+            if (retainedMessageMatch.SubscriptionQualityOfServiceLevel > retainedMessageMatch.ApplicationMessage.QualityOfServiceLevel)
+            {
+                // UPGRADING the QoS is not allowed! 
+                // From MQTT spec: Subscribing to a Topic Filter at QoS 2 is equivalent to saying
+                // "I would like to receive Messages matching this filter at the QoS with which they were published".
+                // This means a publisher is responsible for determining the maximum QoS a Message can be delivered at,
+                // but a subscriber is able to require that the Server downgrades the QoS to one more suitable for its usage.
+                retainedMessageMatch.SubscriptionQualityOfServiceLevel = retainedMessageMatch.ApplicationMessage.QualityOfServiceLevel;
+            }
+
+            return retainedMessageMatch;
         }
 
         async Task<InterceptingSubscriptionEventArgs> InterceptSubscribe(
