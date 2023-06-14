@@ -29,7 +29,7 @@ namespace MQTTnet.Server
         readonly MqttNetSourceLogger _logger;
         readonly MqttServerOptions _options;
 
-        readonly MqttRetainedMessagesManager _retainedMessagesManager;
+        readonly IMqttRetainedMessageStore _retainedMessageStore;
         readonly IMqttNetLogger _rootLogger;
 
         // The _sessions dictionary contains all session, the _subscriberSessions hash set contains subscriber sessions only.
@@ -41,7 +41,7 @@ namespace MQTTnet.Server
 
         public MqttClientSessionsManager(
             MqttServerOptions options,
-            MqttRetainedMessagesManager retainedMessagesManager,
+            IMqttRetainedMessageStore retainedMessageStore,
             MqttServerEventContainer eventContainer,
             IMqttNetLogger logger)
         {
@@ -54,7 +54,7 @@ namespace MQTTnet.Server
             _rootLogger = logger;
 
             _options = options ?? throw new ArgumentNullException(nameof(options));
-            _retainedMessagesManager = retainedMessagesManager ?? throw new ArgumentNullException(nameof(retainedMessagesManager));
+            _retainedMessageStore = retainedMessageStore ?? throw new ArgumentNullException(nameof(retainedMessageStore));
             _eventContainer = eventContainer ?? throw new ArgumentNullException(nameof(eventContainer));
         }
 
@@ -174,7 +174,7 @@ namespace MQTTnet.Server
                 {
                     if (applicationMessage.Retain)
                     {
-                        await _retainedMessagesManager.UpdateMessage(senderId, applicationMessage).ConfigureAwait(false);
+                        await _retainedMessageStore.UpdateMessageAsync(senderId, applicationMessage).ConfigureAwait(false);
                     }
 
                     List<MqttSession> subscriberSessions;
@@ -660,7 +660,7 @@ namespace MQTTnet.Server
         {
             _logger.Verbose("Created new session for client '{0}'.", clientId);
 
-            return new MqttSession(clientId, isPersistent, sessionItems, _options, _eventContainer, _retainedMessagesManager, this);
+            return new MqttSession(clientId, isPersistent, sessionItems, _options, _eventContainer, _retainedMessageStore, this);
         }
 
         async Task FireApplicationMessageNotConsumedEvent(MqttApplicationMessage applicationMessage, string senderId)

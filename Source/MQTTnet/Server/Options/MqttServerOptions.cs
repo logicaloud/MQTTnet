@@ -35,5 +35,7 @@ namespace MQTTnet.Server
         ///     Do not change this value when no memory issues are experienced.
         /// </summary>
         public int WriterBufferSizeMax { get; set; } = 65535;
+
+        public IMqttRetainedMessageStore RetainedMessageStore { get; set; }
     }
 }

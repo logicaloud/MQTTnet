@@ -36,7 +36,7 @@ namespace MQTTnet.Server
             IDictionary items,
             MqttServerOptions serverOptions,
             MqttServerEventContainer eventContainer,
-            MqttRetainedMessagesManager retainedMessagesManager,
+            IMqttRetainedMessageStore retainedMessageStore,
             MqttClientSessionsManager clientSessionsManager)
         {
             Id = clientId ?? throw new ArgumentNullException(nameof(clientId));
@@ -46,7 +46,7 @@ namespace MQTTnet.Server
             _serverOptions = serverOptions ?? throw new ArgumentNullException(nameof(serverOptions));
             _clientSessionsManager = clientSessionsManager ?? throw new ArgumentNullException(nameof(clientSessionsManager));
 
-            _subscriptionsManager = new MqttClientSubscriptionsManager(this, eventContainer, retainedMessagesManager, clientSessionsManager);
+            _subscriptionsManager = new MqttClientSubscriptionsManager(this, eventContainer, retainedMessageStore, clientSessionsManager);
         }
 
         public DateTime CreatedTimestamp { get; } = DateTime.UtcNow;

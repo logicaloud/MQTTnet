@@ -19,7 +19,7 @@ namespace MQTTnet.Server
 
         readonly MqttServerEventContainer _eventContainer;
         readonly Dictionary<ulong, HashSet<MqttSubscription>> _noWildcardSubscriptionsByTopicHash = new Dictionary<ulong, HashSet<MqttSubscription>>();
-        readonly MqttRetainedMessagesManager _retainedMessagesManager;
+        readonly IMqttRetainedMessageStore _retainedMessageStore;
 
         readonly MqttSession _session;
 
@@ -37,12 +37,12 @@ namespace MQTTnet.Server
         public MqttClientSubscriptionsManager(
             MqttSession session,
             MqttServerEventContainer eventContainer,
-            MqttRetainedMessagesManager retainedMessagesManager,
+            IMqttRetainedMessageStore retainedMessageStore,
             ISubscriptionChangedNotification subscriptionChangedNotification)
         {
             _session = session ?? throw new ArgumentNullException(nameof(session));
             _eventContainer = eventContainer ?? throw new ArgumentNullException(nameof(eventContainer));
-            _retainedMessagesManager = retainedMessagesManager ?? throw new ArgumentNullException(nameof(retainedMessagesManager));
+            _retainedMessageStore = retainedMessageStore ?? throw new ArgumentNullException(nameof(retainedMessageStore));
             _subscriptionChangedNotification = subscriptionChangedNotification;
         }
 
@@ -175,7 +175,6 @@ namespace MQTTnet.Server
                 throw new ArgumentNullException(nameof(subscribePacket));
             }
 
-            var retainedApplicationMessages = await _retainedMessagesManager.GetMessages().ConfigureAwait(false);
             var result = new SubscribeResult(subscribePacket.TopicFilters.Count);
 
             var addedSubscriptions = new List<string>();
@@ -210,7 +209,15 @@ namespace MQTTnet.Server
                 addedSubscriptions.Add(topicFilter.Topic);
                 finalTopicFilters.Add(topicFilter);
 
-                FilterRetainedApplicationMessages(retainedApplicationMessages, createSubscriptionResult, result);
+                var retainedMessages = await FilterRetainedApplicationMessages(createSubscriptionResult).ConfigureAwait(false);
+                if (retainedMessages != null)
+                {
+                    if (result.RetainedMessages == null)
+                    {
+                        result.RetainedMessages = new List<MqttRetainedMessageMatch>();
+                    }
+                    result.RetainedMessages.AddRange(retainedMessages);
+                }
             }
 
             // This call will add the new subscription to the internal storage.
@@ -416,60 +423,26 @@ namespace MQTTnet.Server
             };
         }
 
-        static void FilterRetainedApplicationMessages(
-            IList<MqttApplicationMessage> retainedMessages,
-            CreateSubscriptionResult createSubscriptionResult,
-            SubscribeResult subscribeResult)
+        Task<IList<MqttRetainedMessageMatch>> FilterRetainedApplicationMessages(
+            CreateSubscriptionResult createSubscriptionResult
+            )
         {
             if (createSubscriptionResult.Subscription.RetainHandling == MqttRetainHandling.DoNotSendOnSubscribe)
             {
                 // This is a MQTT V5+ feature.
-                return;
+                return Task.FromResult<IList<MqttRetainedMessageMatch>>(null);
             }
 
             if (createSubscriptionResult.Subscription.RetainHandling == MqttRetainHandling.SendAtSubscribeIfNewSubscriptionOnly && !createSubscriptionResult.IsNewSubscription)
             {
                 // This is a MQTT V5+ feature.
-                return;
+                return Task.FromResult<IList<MqttRetainedMessageMatch>>(null);
             }
 
-            for (var index = retainedMessages.Count - 1; index >= 0; index--)
-            {
-                var retainedMessage = retainedMessages[index];
-                if (retainedMessage == null)
-                {
-                    continue;
-                }
+            return _retainedMessageStore.FilterMessagesAsync(createSubscriptionResult.Subscription.Topic, createSubscriptionResult.Subscription.GrantedQualityOfServiceLevel);
 
-                if (MqttTopicFilterComparer.Compare(retainedMessage.Topic, createSubscriptionResult.Subscription.Topic) != MqttTopicFilterCompareResult.IsMatch)
-                {
-                    continue;
-                }
-
-                var retainedMessageMatch = new MqttRetainedMessageMatch(retainedMessage, createSubscriptionResult.Subscription.GrantedQualityOfServiceLevel);
-                if (retainedMessageMatch.SubscriptionQualityOfServiceLevel > retainedMessageMatch.ApplicationMessage.QualityOfServiceLevel)
-                {
-                    // UPGRADING the QoS is not allowed! 
-                    // From MQTT spec: Subscribing to a Topic Filter at QoS 2 is equivalent to saying
-                    // "I would like to receive Messages matching this filter at the QoS with which they were published".
-                    // This means a publisher is responsible for determining the maximum QoS a Message can be delivered at,
-                    // but a subscriber is able to require that the Server downgrades the QoS to one more suitable for its usage.
-                    retainedMessageMatch.SubscriptionQualityOfServiceLevel = retainedMessageMatch.ApplicationMessage.QualityOfServiceLevel;
-                }
-
-                if (subscribeResult.RetainedMessages == null)
-                {
-                    subscribeResult.RetainedMessages = new List<MqttRetainedMessageMatch>();
-                }
-
-                subscribeResult.RetainedMessages.Add(retainedMessageMatch);
-
-                // Clear the retained message from the list because the client should receive every message only 
-                // one time even if multiple subscriptions affect them.
-                retainedMessages[index] = null;
-            }
         }
-
+    
         async Task<InterceptingSubscriptionEventArgs> InterceptSubscribe(
             MqttTopicFilter topicFilter,
             List<MqttUserProperty> userProperties,

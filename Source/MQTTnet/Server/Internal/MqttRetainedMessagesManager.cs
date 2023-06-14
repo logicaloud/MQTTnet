@@ -1,17 +1,14 @@
-// Licensed to the .NET Foundation under one or more agreements.
-// The .NET Foundation licenses this file to you under the MIT license.
-// See the LICENSE file in the project root for more information.
-
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using MQTTnet.Diagnostics;
 using MQTTnet.Internal;
+using MQTTnet.Protocol;
 
 namespace MQTTnet.Server
 {
-    public sealed class MqttRetainedMessagesManager
+    public class MqttRetainedMessagesManager : IMqttRetainedMessageStore
     {
         readonly Dictionary<string, MqttApplicationMessage> _messages = new Dictionary<string, MqttApplicationMessage>(4096);
         readonly AsyncLock _storageAccessLock = new AsyncLock();
@@ -21,7 +18,7 @@ namespace MQTTnet.Server
 
         public MqttRetainedMessagesManager(MqttServerEventContainer eventContainer, IMqttNetLogger logger)
         {
-            _eventContainer = eventContainer ?? throw new ArgumentNullException(nameof(eventContainer));
+            _eventContainer = eventContainer;
 
             if (logger == null)
                 throw new ArgumentNullException(nameof(logger));
@@ -29,7 +26,7 @@ namespace MQTTnet.Server
             _logger = logger.WithSource(nameof(MqttRetainedMessagesManager));
         }
 
-        public async Task Start()
+        public async Task StartAsync()
         {
             try
             {
@@ -55,7 +52,13 @@ namespace MQTTnet.Server
             }
         }
 
-        public async Task UpdateMessage(string clientId, MqttApplicationMessage applicationMessage)
+        public Task StopAsync()
+        {
+            // free memory
+            return ClearMessagesAsync();
+        }
+         
+        public async Task UpdateMessageAsync(string clientId, MqttApplicationMessage applicationMessage)
         {
             if (applicationMessage == null)
             {
@@ -117,7 +120,7 @@ namespace MQTTnet.Server
             }
         }
 
-        public Task<IList<MqttApplicationMessage>> GetMessages()
+        public Task<IList<MqttApplicationMessage>> GetMessagesAsync()
         {
             lock (_messages)
             {
@@ -126,20 +129,20 @@ namespace MQTTnet.Server
             }
         }
 
-        public Task<MqttApplicationMessage> GetMessage(string topic)
+        public Task<MqttApplicationMessage> GetMessageAsync(string topic)
         {
             lock (_messages)
             {
                 if (_messages.TryGetValue(topic, out var message))
                 {
-                    return Task.FromResult(message);
+                    return Task.FromResult<MqttApplicationMessage>(message);
                 }
             }
 
             return Task.FromResult<MqttApplicationMessage>(null);
         }
 
-        public async Task ClearMessages()
+        public async Task ClearMessagesAsync()
         {
             lock (_messages)
             {
@@ -152,6 +155,38 @@ namespace MQTTnet.Server
             }
         }
 
+        public async Task<IList<MqttRetainedMessageMatch>> FilterMessagesAsync(string topic, MqttQualityOfServiceLevel grantedQualityOfServiceLevel)
+        {
+            var retainedMessages = await GetMessagesAsync().ConfigureAwait(false);
+
+            var matchingRetainedMessages = new List<MqttRetainedMessageMatch>();
+
+            for (var index = retainedMessages.Count - 1; index >= 0; index--)
+            {
+                var retainedMessage = retainedMessages[index];
+                if (retainedMessage == null)
+                {
+                    continue;
+                }
+
+                if (MqttTopicFilterComparer.Compare(retainedMessage.Topic, topic) != MqttTopicFilterCompareResult.IsMatch)
+                {
+                    continue;
+                }
+
+                var matchingMessage = MqttRetainedMessageMatchFactory.CreateMatchingRetainedMessage(retainedMessage, grantedQualityOfServiceLevel);
+
+                matchingRetainedMessages.Add(matchingMessage);
+
+                // Clear the retained message from the list because the client should receive every message only 
+                // one time even if multiple subscriptions affect them.
+                retainedMessages[index] = null;
+            }
+
+            return matchingRetainedMessages;
+
+        }
+
         private static bool SequenceEqual(ArraySegment<byte> source, ArraySegment<byte> target)
         {
 #if NETCOREAPP3_1_OR_GREATER || NETSTANDARD2_1
@@ -160,5 +195,6 @@ namespace MQTTnet.Server
             return source.Count == target.Count && Enumerable.SequenceEqual(source, target);
 #endif
         }
+
     }
 }
