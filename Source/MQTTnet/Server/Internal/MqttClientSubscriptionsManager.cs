@@ -19,7 +19,7 @@ namespace MQTTnet.Server
 
         readonly MqttServerEventContainer _eventContainer;
         readonly Dictionary<ulong, HashSet<MqttSubscription>> _noWildcardSubscriptionsByTopicHash = new Dictionary<ulong, HashSet<MqttSubscription>>();
-        readonly MqttRetainedMessagesManager _retainedMessagesManager;
+        readonly IMqttRetainedMessageStore _retainedMessageStore;
 
         readonly MqttSession _session;
 
@@ -37,12 +37,12 @@ namespace MQTTnet.Server
         public MqttClientSubscriptionsManager(
             MqttSession session,
             MqttServerEventContainer eventContainer,
-            MqttRetainedMessagesManager retainedMessagesManager,
+            IMqttRetainedMessageStore retainedMessageStore,
             ISubscriptionChangedNotification subscriptionChangedNotification)
         {
             _session = session ?? throw new ArgumentNullException(nameof(session));
             _eventContainer = eventContainer ?? throw new ArgumentNullException(nameof(eventContainer));
-            _retainedMessagesManager = retainedMessagesManager ?? throw new ArgumentNullException(nameof(retainedMessagesManager));
+            _retainedMessageStore = retainedMessageStore ?? throw new ArgumentNullException(nameof(retainedMessageStore));
             _subscriptionChangedNotification = subscriptionChangedNotification;
         }
 
@@ -423,75 +423,26 @@ namespace MQTTnet.Server
             };
         }
 
-        async Task<IEnumerable<MqttRetainedMessageMatch>> FilterRetainedApplicationMessages(
+        Task<IList<MqttRetainedMessageMatch>> FilterRetainedApplicationMessages(
             CreateSubscriptionResult createSubscriptionResult
             )
         {
             if (createSubscriptionResult.Subscription.RetainHandling == MqttRetainHandling.DoNotSendOnSubscribe)
             {
                 // This is a MQTT V5+ feature.
-                return null;
+                return Task.FromResult<IList<MqttRetainedMessageMatch>>(null);
             }
 
             if (createSubscriptionResult.Subscription.RetainHandling == MqttRetainHandling.SendAtSubscribeIfNewSubscriptionOnly && !createSubscriptionResult.IsNewSubscription)
             {
                 // This is a MQTT V5+ feature.
-                return null;
+                return Task.FromResult<IList<MqttRetainedMessageMatch>>(null);
             }
 
-            if (_eventContainer.InterceptingFilterRetainedMessagesEvent.HasHandlers)
-            {
-                var eventArgs = new InterceptingRetainedMessagesFilterEventArgs(createSubscriptionResult.Subscription.Topic, createSubscriptionResult.Subscription.GrantedQualityOfServiceLevel);
-                await _eventContainer.InterceptingFilterRetainedMessagesEvent.InvokeAsync(eventArgs).ConfigureAwait(false);
-                return eventArgs.FilteredMessages;
-            }
+            return _retainedMessageStore.FilterMessagesAsync(createSubscriptionResult.Subscription.Topic, createSubscriptionResult.Subscription.GrantedQualityOfServiceLevel);
 
-            var retainedMessages = await _retainedMessagesManager.GetMessages();
-
-            var matchingRetainedMessages = new List<MqttRetainedMessageMatch>();
-
-            for (var index = retainedMessages.Count - 1; index >= 0; index--)
-            {
-                var retainedMessage = retainedMessages[index];
-                if (retainedMessage == null)
-                {
-                    continue;
-                }
-
-                if (MqttTopicFilterComparer.Compare(retainedMessage.Topic, createSubscriptionResult.Subscription.Topic) != MqttTopicFilterCompareResult.IsMatch)
-                {
-                    continue;
-                }
-
-                var matchingMessage = CreateMatchingRetainedMessage(retainedMessage, createSubscriptionResult.Subscription.GrantedQualityOfServiceLevel);
-
-                matchingRetainedMessages.Add(matchingMessage);
-
-                // Clear the retained message from the list because the client should receive every message only 
-                // one time even if multiple subscriptions affect them.
-                retainedMessages[index] = null;
-            }
-
-            return matchingRetainedMessages;
         }
     
-
-        public static MqttRetainedMessageMatch CreateMatchingRetainedMessage(MqttApplicationMessage retainedMessage, MqttQualityOfServiceLevel grantedQualityOfServiceLevel)
-        {
-            var retainedMessageMatch = new MqttRetainedMessageMatch(retainedMessage, grantedQualityOfServiceLevel);
-            if (retainedMessageMatch.SubscriptionQualityOfServiceLevel > retainedMessageMatch.ApplicationMessage.QualityOfServiceLevel)
-            {
-                // UPGRADING the QoS is not allowed! 
-                // From MQTT spec: Subscribing to a Topic Filter at QoS 2 is equivalent to saying
-                // "I would like to receive Messages matching this filter at the QoS with which they were published".
-                // This means a publisher is responsible for determining the maximum QoS a Message can be delivered at,
-                // but a subscriber is able to require that the Server downgrades the QoS to one more suitable for its usage.
-                retainedMessageMatch.SubscriptionQualityOfServiceLevel = retainedMessageMatch.ApplicationMessage.QualityOfServiceLevel;
-            }
-
-            return retainedMessageMatch;
-        }
-
         async Task<InterceptingSubscriptionEventArgs> InterceptSubscribe(
             MqttTopicFilter topicFilter,
             List<MqttUserProperty> userProperties,

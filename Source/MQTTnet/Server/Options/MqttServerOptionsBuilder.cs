@@ -172,6 +172,12 @@ namespace MQTTnet.Server
             return this;
         }
 
+        public MqttServerOptionsBuilder WithRetainedMessageStore(IMqttRetainedMessageStore value)
+        {
+            _options.RetainedMessageStore = value;
+            return this;
+        }
+
 #if !WINDOWS_UWP
         public MqttServerOptionsBuilder WithEncryptionCertificate(byte[] value, IMqttServerCertificateCredentials credentials = null)
         {

@@ -9,19 +9,17 @@ namespace MQTTnet.Server
 {
     public sealed class RetainedMessageChangedEventArgs : EventArgs
     {
-        public enum RetainedMessageChangeType { Add, Remove, Replace };
-
-        public RetainedMessageChangedEventArgs(string clientId,MqttApplicationMessage changedRetainedMessage,  RetainedMessageChangeType changeType)
+        public RetainedMessageChangedEventArgs(string clientId, MqttApplicationMessage changedRetainedMessage, List<MqttApplicationMessage> storedRetainedMessages)
         {
             ClientId = clientId ?? throw new ArgumentNullException(nameof(clientId));
             ChangedRetainedMessage = changedRetainedMessage ?? throw new ArgumentNullException(nameof(changedRetainedMessage));
-            ChangeType = changeType;
+            StoredRetainedMessages = storedRetainedMessages ?? throw new ArgumentNullException(nameof(storedRetainedMessages));
         }
 
         public MqttApplicationMessage ChangedRetainedMessage { get; }
 
         public string ClientId { get; }
 
-        public RetainedMessageChangeType ChangeType { get; }
+        public List<MqttApplicationMessage> StoredRetainedMessages { get; }
     }
 }

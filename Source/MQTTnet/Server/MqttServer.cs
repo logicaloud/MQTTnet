@@ -25,7 +25,7 @@ namespace MQTTnet.Server
         readonly MqttServerKeepAliveMonitor _keepAliveMonitor;
         readonly MqttNetSourceLogger _logger;
         readonly MqttServerOptions _options;
-        readonly MqttRetainedMessagesManager _retainedMessagesManager;
+        readonly IMqttRetainedMessageStore _retainedMessageStore;
         readonly IMqttNetLogger _rootLogger;
 
         CancellationTokenSource _cancellationTokenSource;
@@ -44,8 +44,15 @@ namespace MQTTnet.Server
             _rootLogger = logger ?? throw new ArgumentNullException(nameof(logger));
             _logger = logger.WithSource(nameof(MqttServer));
 
-            _retainedMessagesManager = new MqttRetainedMessagesManager(_eventContainer, _rootLogger);
-            _clientSessionsManager = new MqttClientSessionsManager(options, _retainedMessagesManager, _eventContainer, _rootLogger);
+            if (_options.RetainedMessageStore == null)
+            {
+                _retainedMessageStore = new MqttRetainedMessagesManager(_eventContainer, _rootLogger);
+            }
+            else
+            {
+                _retainedMessageStore = _options.RetainedMessageStore;
+            }
+            _clientSessionsManager = new MqttClientSessionsManager(options, _retainedMessageStore, _eventContainer, _rootLogger);
             _keepAliveMonitor = new MqttServerKeepAliveMonitor(options, _clientSessionsManager, _rootLogger);
         }
 
@@ -181,7 +188,7 @@ namespace MQTTnet.Server
         {
             ThrowIfNotStarted();
 
-            return _retainedMessagesManager?.ClearMessages() ?? CompletedTask.Instance;
+            return _retainedMessageStore?.ClearMessagesAsync() ?? CompletedTask.Instance;
         }
 
         public Task DisconnectClientAsync(string id, MqttDisconnectReasonCode reasonCode)
@@ -207,7 +214,7 @@ namespace MQTTnet.Server
         {
             ThrowIfNotStarted();
 
-            return _retainedMessagesManager.GetMessages();
+            return _retainedMessageStore.GetMessagesAsync();
         }
 
         public Task<MqttApplicationMessage> GetRetainedMessageAsync(string topic)
@@ -219,7 +226,7 @@ namespace MQTTnet.Server
 
             ThrowIfNotStarted();
 
-            return _retainedMessagesManager.GetMessage(topic);
+            return _retainedMessageStore.GetMessageAsync(topic);
         }
 
         public Task<IList<MqttSessionStatus>> GetSessionsAsync()
@@ -266,7 +273,7 @@ namespace MQTTnet.Server
             _cancellationTokenSource = new CancellationTokenSource();
             var cancellationToken = _cancellationTokenSource.Token;
 
-            await _retainedMessagesManager.Start().ConfigureAwait(false);
+            await _retainedMessageStore.StartAsync().ConfigureAwait(false);
             _clientSessionsManager.Start();
             _keepAliveMonitor.Start(cancellationToken);
 
@@ -306,6 +313,7 @@ namespace MQTTnet.Server
                 _cancellationTokenSource = null;
             }
 
+            await _retainedMessageStore.StopAsync().ConfigureAwait(false);
             await _eventContainer.StoppedEvent.InvokeAsync(EventArgs.Empty).ConfigureAwait(false);
 
             _logger.Info("Stopped.");
@@ -362,7 +370,7 @@ namespace MQTTnet.Server
             ThrowIfDisposed();
             ThrowIfNotStarted();
 
-            return _retainedMessagesManager?.UpdateMessage(null, retainedMessage);
+            return _retainedMessageStore?.UpdateMessageAsync(null, retainedMessage);
         }
 
         protected override void Dispose(bool disposing)
