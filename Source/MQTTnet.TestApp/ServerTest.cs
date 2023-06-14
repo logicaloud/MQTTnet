@@ -67,8 +67,7 @@ namespace MQTTnet.TestApp
                         Directory.CreateDirectory(directory);
                     }
 
-                    var retainedMessages = mqttServer.GetRetainedMessagesAsync().GetAwaiter().GetResult();
-                    File.WriteAllText(Filename, JsonConvert.SerializeObject(retainedMessages));
+                    File.WriteAllText(Filename, JsonConvert.SerializeObject(e.StoredRetainedMessages));
                     return CompletedTask.Instance;
                 };
                 

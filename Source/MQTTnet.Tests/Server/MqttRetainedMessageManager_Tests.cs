@@ -16,7 +16,7 @@ namespace MQTTnet.Tests.Server
             var logger = new Mockups.TestLogger();
             var eventContainer = new MQTTnet.Server.MqttServerEventContainer();
             var retainedMessagesManager = new MQTTnet.Server.MqttRetainedMessagesManager(eventContainer, logger);
-            var task = retainedMessagesManager.GetMessage("undefined");
+            var task = retainedMessagesManager.GetMessageAsync("undefined");
             Assert.IsNotNull(task, "Task should not be null");
             var result = await task;
             Assert.IsNull(result, "Null result expected");

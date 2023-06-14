@@ -7,7 +7,6 @@ using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using MQTTnet.Client;
 using MQTTnet.Formatter;
-using MQTTnet.Internal;
 using MQTTnet.Packets;
 using MQTTnet.Protocol;
 

@@ -1,3 +1,7 @@
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -8,7 +12,7 @@ using MQTTnet.Protocol;
 
 namespace MQTTnet.Server
 {
-    public class MqttRetainedMessagesManager : IMqttRetainedMessageStore
+    public sealed class MqttRetainedMessagesManager : IMqttRetainedMessageStore
     {
         readonly Dictionary<string, MqttApplicationMessage> _messages = new Dictionary<string, MqttApplicationMessage>(4096);
         readonly AsyncLock _storageAccessLock = new AsyncLock();
@@ -184,7 +188,6 @@ namespace MQTTnet.Server
             }
 
             return matchingRetainedMessages;
-
         }
 
         private static bool SequenceEqual(ArraySegment<byte> source, ArraySegment<byte> target)
@@ -195,6 +198,5 @@ namespace MQTTnet.Server
             return source.Count == target.Count && Enumerable.SequenceEqual(source, target);
 #endif
         }
-
     }
 }

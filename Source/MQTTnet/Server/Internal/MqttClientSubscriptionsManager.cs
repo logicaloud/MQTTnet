@@ -442,7 +442,7 @@ namespace MQTTnet.Server
             return _retainedMessageStore.FilterMessagesAsync(createSubscriptionResult.Subscription.Topic, createSubscriptionResult.Subscription.GrantedQualityOfServiceLevel);
 
         }
-    
+
         async Task<InterceptingSubscriptionEventArgs> InterceptSubscribe(
             MqttTopicFilter topicFilter,
             List<MqttUserProperty> userProperties,
