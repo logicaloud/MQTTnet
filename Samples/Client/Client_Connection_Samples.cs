@@ -7,6 +7,7 @@
 // ReSharper disable InconsistentNaming
 
 using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 using MQTTnet.Client;
 using MQTTnet.Extensions.WebSocket4Net;
 using MQTTnet.Formatter;
@@ -68,32 +69,6 @@ public static class Client_Connection_Samples
             var mqttClientDisconnectOptions = mqttFactory.CreateClientDisconnectOptionsBuilder().Build();
 
             await mqttClient.DisconnectAsync(mqttClientDisconnectOptions, CancellationToken.None);
-        }
-    }
-    
-    public static async Task Connect_With_Amazon_AWS()
-    {
-        /*
-         * This sample creates a simple MQTT client and connects to an Amazon Web Services broker.
-         *
-         * The broker requires special settings which are set here.
-         */
-
-        var mqttFactory = new MqttFactory();
-
-        using (var mqttClient = mqttFactory.CreateMqttClient())
-        {
-            var mqttClientOptions = new MqttClientOptionsBuilder()
-                .WithTcpServer("amazon.web.services.broker")
-                // Disabling packet fragmentation is very important!  
-                .WithoutPacketFragmentation()
-                .Build();
-            
-            await mqttClient.ConnectAsync(mqttClientOptions, CancellationToken.None);
-
-            Console.WriteLine("The MQTT client is connected.");
-
-            await mqttClient.DisconnectAsync();
         }
     }
 
@@ -161,15 +136,15 @@ public static class Client_Connection_Samples
         using (var mqttClient = mqttFactory.CreateMqttClient())
         {
             var mqttClientOptions = new MqttClientOptionsBuilder().WithTcpServer("mqtt.fluux.io")
-                .WithTls(
+                .WithTlsOptions(
                     o =>
                     {
                         // The used public broker sometimes has invalid certificates. This sample accepts all
                         // certificates. This should not be used in live environments.
-                        o.CertificateValidationHandler = _ => true;
+                        o.WithCertificateValidationHandler(_ => true);
 
                         // The default value is determined by the OS. Set manually to force version.
-                        o.SslProtocol = SslProtocols.Tls12;
+                        o.WithSslProtocols(SslProtocols.Tls12);
                     })
                 .Build();
 
@@ -196,7 +171,7 @@ public static class Client_Connection_Samples
 
         using (var mqttClient = mqttFactory.CreateMqttClient())
         {
-            var mqttClientOptions = new MqttClientOptionsBuilder().WithWebSocketServer("broker.hivemq.com:8000/mqtt").Build();
+            var mqttClientOptions = new MqttClientOptionsBuilder().WithWebSocketServer(o => o.WithUri("broker.hivemq.com:8000/mqtt")).Build();
 
             var response = await mqttClient.ConnectAsync(mqttClientOptions, CancellationToken.None);
 
@@ -218,7 +193,7 @@ public static class Client_Connection_Samples
 
         using (var mqttClient = mqttFactory.CreateMqttClient())
         {
-            var mqttClientOptions = new MqttClientOptionsBuilder().WithWebSocketServer("broker.hivemq.com:8000/mqtt").Build();
+            var mqttClientOptions = new MqttClientOptionsBuilder().WithWebSocketServer(o => o.WithUri("broker.hivemq.com:8000/mqtt")).Build();
 
             var response = await mqttClient.ConnectAsync(mqttClientOptions, CancellationToken.None);
 
@@ -241,13 +216,11 @@ public static class Client_Connection_Samples
         using (var mqttClient = mqttFactory.CreateMqttClient())
         {
             var mqttClientOptions = new MqttClientOptionsBuilder().WithTcpServer("test.mosquitto.org", 8883)
-                .WithTls(
-                    o =>
-                    {
+                .WithTlsOptions(
+                    o => o.WithCertificateValidationHandler(
                         // The used public broker sometimes has invalid certificates. This sample accepts all
                         // certificates. This should not be used in live environments.
-                        o.CertificateValidationHandler = _ => true;
-                    })
+                        _ => true))
                 .Build();
 
             // In MQTTv5 the response contains much more information.
@@ -259,6 +232,31 @@ public static class Client_Connection_Samples
 
                 response.DumpToConsole();
             }
+        }
+    }
+
+    public static async Task Connect_With_Amazon_AWS()
+    {
+        /*
+         * This sample creates a simple MQTT client and connects to an Amazon Web Services broker.
+         *
+         * The broker requires special settings which are set here.
+         */
+
+        var mqttFactory = new MqttFactory();
+
+        using (var mqttClient = mqttFactory.CreateMqttClient())
+        {
+            var mqttClientOptions = new MqttClientOptionsBuilder().WithTcpServer("amazon.web.services.broker")
+                // Disabling packet fragmentation is very important!  
+                .WithoutPacketFragmentation()
+                .Build();
+
+            await mqttClient.ConnectAsync(mqttClientOptions, CancellationToken.None);
+
+            Console.WriteLine("The MQTT client is connected.");
+
+            await mqttClient.DisconnectAsync();
         }
     }
 
@@ -317,18 +315,19 @@ public static class Client_Connection_Samples
         using (var mqttClient = mqttFactory.CreateMqttClient())
         {
             var mqttClientOptions = new MqttClientOptionsBuilder().WithTcpServer("mqtt.fluux.io", 8883)
-                .WithTls(
+                .WithTlsOptions(
                     o =>
                     {
-                        o.CertificateValidationHandler = eventArgs =>
-                        {
-                            eventArgs.Certificate.Subject.DumpToConsole();
-                            eventArgs.Certificate.GetExpirationDateString().DumpToConsole();
-                            eventArgs.Chain.ChainPolicy.RevocationMode.DumpToConsole();
-                            eventArgs.Chain.ChainStatus.DumpToConsole();
-                            eventArgs.SslPolicyErrors.DumpToConsole();
-                            return true;
-                        };
+                        o.WithCertificateValidationHandler(
+                            eventArgs =>
+                            {
+                                eventArgs.Certificate.Subject.DumpToConsole();
+                                eventArgs.Certificate.GetExpirationDateString().DumpToConsole();
+                                eventArgs.Chain.ChainPolicy.RevocationMode.DumpToConsole();
+                                eventArgs.Chain.ChainStatus.DumpToConsole();
+                                eventArgs.SslPolicyErrors.DumpToConsole();
+                                return true;
+                            });
                     })
                 .Build();
 
@@ -432,6 +431,59 @@ public static class Client_Connection_Samples
                         }
                     }
                 });
+
+            Console.WriteLine("Press <Enter> to exit");
+            Console.ReadLine();
         }
     }
+
+    public static async Task ConnectTls_WithCaFile()
+    {
+        var mqttFactory = new MqttFactory();
+
+        X509Certificate2Collection caChain = new X509Certificate2Collection();
+        caChain.ImportFromPem(mosquitto_org); // from https://test.mosquitto.org/ssl/mosquitto.org.crt
+
+        using (var mqttClient = mqttFactory.CreateMqttClient())
+        {
+            var mqttClientOptions = new MqttClientOptionsBuilder()
+                .WithTcpServer("test.mosquitto.org", 8883)
+                .WithTlsOptions(new MqttClientTlsOptionsBuilder()
+                    .WithTrustChain(caChain) 
+                    .Build())
+                .Build();
+
+            var connAck = await mqttClient.ConnectAsync(mqttClientOptions);
+            Console.WriteLine("Connected to test.moquitto.org:8883 with CaFile mosquitto.org.crt: " + connAck.ResultCode);
+        }
+
+
+    }
+    const string mosquitto_org = @"
+-----BEGIN CERTIFICATE-----
+MIIEAzCCAuugAwIBAgIUBY1hlCGvdj4NhBXkZ/uLUZNILAwwDQYJKoZIhvcNAQEL
+BQAwgZAxCzAJBgNVBAYTAkdCMRcwFQYDVQQIDA5Vbml0ZWQgS2luZ2RvbTEOMAwG
+A1UEBwwFRGVyYnkxEjAQBgNVBAoMCU1vc3F1aXR0bzELMAkGA1UECwwCQ0ExFjAU
+BgNVBAMMDW1vc3F1aXR0by5vcmcxHzAdBgkqhkiG9w0BCQEWEHJvZ2VyQGF0Y2hv
+by5vcmcwHhcNMjAwNjA5MTEwNjM5WhcNMzAwNjA3MTEwNjM5WjCBkDELMAkGA1UE
+BhMCR0IxFzAVBgNVBAgMDlVuaXRlZCBLaW5nZG9tMQ4wDAYDVQQHDAVEZXJieTES
+MBAGA1UECgwJTW9zcXVpdHRvMQswCQYDVQQLDAJDQTEWMBQGA1UEAwwNbW9zcXVp
+dHRvLm9yZzEfMB0GCSqGSIb3DQEJARYQcm9nZXJAYXRjaG9vLm9yZzCCASIwDQYJ
+KoZIhvcNAQEBBQADggEPADCCAQoCggEBAME0HKmIzfTOwkKLT3THHe+ObdizamPg
+UZmD64Tf3zJdNeYGYn4CEXbyP6fy3tWc8S2boW6dzrH8SdFf9uo320GJA9B7U1FW
+Te3xda/Lm3JFfaHjkWw7jBwcauQZjpGINHapHRlpiCZsquAthOgxW9SgDgYlGzEA
+s06pkEFiMw+qDfLo/sxFKB6vQlFekMeCymjLCbNwPJyqyhFmPWwio/PDMruBTzPH
+3cioBnrJWKXc3OjXdLGFJOfj7pP0j/dr2LH72eSvv3PQQFl90CZPFhrCUcRHSSxo
+E6yjGOdnz7f6PveLIB574kQORwt8ePn0yidrTC1ictikED3nHYhMUOUCAwEAAaNT
+MFEwHQYDVR0OBBYEFPVV6xBUFPiGKDyo5V3+Hbh4N9YSMB8GA1UdIwQYMBaAFPVV
+6xBUFPiGKDyo5V3+Hbh4N9YSMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQEL
+BQADggEBAGa9kS21N70ThM6/Hj9D7mbVxKLBjVWe2TPsGfbl3rEDfZ+OKRZ2j6AC
+6r7jb4TZO3dzF2p6dgbrlU71Y/4K0TdzIjRj3cQ3KSm41JvUQ0hZ/c04iGDg/xWf
++pp58nfPAYwuerruPNWmlStWAXf0UTqRtg4hQDWBuUFDJTuWuuBvEXudz74eh/wK
+sMwfu1HFvjy5Z0iMDU8PUDepjVolOCue9ashlS4EB5IECdSR2TItnAIiIwimx839
+LdUdRudafMu5T5Xma182OC0/u/xRlEm+tvKGGmfFcN0piqVl8OrSPBgIlb+1IKJE
+m/XriWr/Cq4h/JfB7NTsezVslgkBaoU=
+-----END CERTIFICATE-----
+";
+
 }

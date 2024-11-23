@@ -3,18 +3,20 @@
 // See the LICENSE file in the project root for more information.
 
 #if !WINDOWS_UWP
-using MQTTnet.Channel;
-using MQTTnet.Client;
-using MQTTnet.Exceptions;
 using System;
 using System.IO;
+using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Runtime.ExceptionServices;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
+using MQTTnet.Channel;
+using MQTTnet.Client;
+using MQTTnet.Exceptions;
 using MQTTnet.Internal;
+using MQTTnet.Protocol;
 
 namespace MQTTnet.Implementations
 {
@@ -62,22 +64,27 @@ namespace MQTTnet.Implementations
             {
                 if (_tcpOptions.AddressFamily == AddressFamily.Unspecified)
                 {
-                    socket = new CrossPlatformSocket();
+                    socket = new CrossPlatformSocket(_tcpOptions.ProtocolType);
                 }
                 else
                 {
-                    socket = new CrossPlatformSocket(_tcpOptions.AddressFamily);
+                    socket = new CrossPlatformSocket(_tcpOptions.AddressFamily, _tcpOptions.ProtocolType);
                 }
 
                 if (_tcpOptions.LocalEndpoint != null)
                 {
                     socket.Bind(_tcpOptions.LocalEndpoint);
                 }
-                
+
                 socket.ReceiveBufferSize = _tcpOptions.BufferSize;
                 socket.SendBufferSize = _tcpOptions.BufferSize;
                 socket.SendTimeout = (int)_clientOptions.Timeout.TotalMilliseconds;
-                socket.NoDelay = _tcpOptions.NoDelay;
+
+                if (_tcpOptions.ProtocolType == ProtocolType.Tcp)
+                {
+                    // Other protocol types do not support the Nagle algorithm.
+                    socket.NoDelay = _tcpOptions.NoDelay;
+                }
 
                 if (socket.LingerState != null)
                 {
@@ -92,7 +99,30 @@ namespace MQTTnet.Implementations
                     socket.DualMode = _tcpOptions.DualMode.Value;
                 }
 
-                await socket.ConnectAsync(_tcpOptions.Server, _tcpOptions.GetPort(), cancellationToken).ConfigureAwait(false);
+                // This block is only for backward compatibility.
+                if (_tcpOptions.RemoteEndpoint == null && !string.IsNullOrEmpty(_tcpOptions.Server))
+                {
+                    int port;
+                    if (_tcpOptions.Port.HasValue)
+                    {
+                        port = _tcpOptions.Port.Value;
+                    }
+                    else
+                    {
+                        if (_tcpOptions.TlsOptions?.UseTls == true)
+                        {
+                            port = MqttPorts.Secure;
+                        }
+                        else
+                        {
+                            port = MqttPorts.Default;
+                        }
+                    }
+
+                    _tcpOptions.RemoteEndpoint = new DnsEndPoint(_tcpOptions.Server, port, AddressFamily.Unspecified);
+                }
+
+                await socket.ConnectAsync(_tcpOptions.RemoteEndpoint, cancellationToken).ConfigureAwait(false);
 
                 cancellationToken.ThrowIfCancellationRequested();
 
@@ -103,10 +133,31 @@ namespace MQTTnet.Implementations
                     var targetHost = _tcpOptions.TlsOptions.TargetHost;
                     if (string.IsNullOrEmpty(targetHost))
                     {
-                        targetHost = _tcpOptions.Server;
+                        if (_tcpOptions.RemoteEndpoint is DnsEndPoint dns)
+                        {
+                            targetHost = dns.Host;
+                        }
                     }
-                    
-                    var sslStream = new SslStream(networkStream, false, InternalUserCertificateValidationCallback);
+
+                    SslStream sslStream;
+                    if (_tcpOptions.TlsOptions.CertificateSelectionHandler != null)
+                    {
+                        sslStream = new SslStream(
+                            networkStream,
+                            false,
+                            InternalUserCertificateValidationCallback,
+                            InternalUserCertificateSelectionCallback);
+                    }
+                    else
+                    {
+                        // Use a different constructor depending on the options for MQTTnet so that we do not have
+                        // to copy the exact same behavior of the selection handler.
+                        sslStream = new SslStream(
+                            networkStream,
+                            false,
+                            InternalUserCertificateValidationCallback);
+                    }
+
                     try
                     {
 #if NETCOREAPP3_1_OR_GREATER
@@ -115,13 +166,28 @@ namespace MQTTnet.Implementations
                             ApplicationProtocols = _tcpOptions.TlsOptions.ApplicationProtocols,
                             ClientCertificates = LoadCertificates(),
                             EnabledSslProtocols = _tcpOptions.TlsOptions.SslProtocol,
-                            CertificateRevocationCheckMode =
- _tcpOptions.TlsOptions.IgnoreCertificateRevocationErrors ? X509RevocationMode.NoCheck : _tcpOptions.TlsOptions.RevocationMode,
+                            CertificateRevocationCheckMode = _tcpOptions.TlsOptions.IgnoreCertificateRevocationErrors
+                                ? X509RevocationMode.NoCheck
+                                : _tcpOptions.TlsOptions.RevocationMode,
                             TargetHost = targetHost,
                             CipherSuitesPolicy = _tcpOptions.TlsOptions.CipherSuitesPolicy,
                             EncryptionPolicy = _tcpOptions.TlsOptions.EncryptionPolicy,
                             AllowRenegotiation = _tcpOptions.TlsOptions.AllowRenegotiation
                         };
+
+#if NET7_0_OR_GREATER
+                        if (_tcpOptions.TlsOptions.TrustChain?.Count > 0)
+                        {
+                            sslOptions.CertificateChainPolicy = new X509ChainPolicy
+                            {
+                                TrustMode = X509ChainTrustMode.CustomRootTrust,
+                                VerificationFlags = X509VerificationFlags.IgnoreEndRevocationUnknown,
+                                RevocationMode = _tcpOptions.TlsOptions.IgnoreCertificateRevocationErrors ? X509RevocationMode.NoCheck : _tcpOptions.TlsOptions.RevocationMode
+                            };
+
+                            sslOptions.CertificateChainPolicy.CustomTrustStore.AddRange(_tcpOptions.TlsOptions.TrustChain);
+                        }
+#endif
 
                         await sslStream.AuthenticateAsClientAsync(sslOptions, cancellationToken).ConfigureAwait(false);
 #else
@@ -272,19 +338,34 @@ namespace MQTTnet.Implementations
             }
         }
 
+        X509Certificate InternalUserCertificateSelectionCallback(
+            object sender,
+            string targetHost,
+            X509CertificateCollection localCertificates,
+            X509Certificate remoteCertificate,
+            string[] acceptableIssuers)
+        {
+            var certificateSelectionHandler = _tcpOptions?.TlsOptions?.CertificateSelectionHandler;
+            if (certificateSelectionHandler != null)
+            {
+                var eventArgs = new MqttClientCertificateSelectionEventArgs(targetHost, localCertificates, remoteCertificate, acceptableIssuers, _tcpOptions);
+                return certificateSelectionHandler(eventArgs);
+            }
+
+            if (localCertificates?.Count > 0)
+            {
+                return localCertificates[0];
+            }
+
+            return null;
+        }
+
         bool InternalUserCertificateValidationCallback(object sender, X509Certificate x509Certificate, X509Chain chain, SslPolicyErrors sslPolicyErrors)
         {
             var certificateValidationHandler = _tcpOptions?.TlsOptions?.CertificateValidationHandler;
             if (certificateValidationHandler != null)
             {
-                var eventArgs = new MqttClientCertificateValidationEventArgs
-                {
-                    Certificate = x509Certificate,
-                    Chain = chain,
-                    SslPolicyErrors = sslPolicyErrors,
-                    ClientOptions = _tcpOptions
-                };
-
+                var eventArgs = new MqttClientCertificateValidationEventArgs(x509Certificate, chain, sslPolicyErrors, _tcpOptions);
                 return certificateValidationHandler(eventArgs);
             }
 
@@ -298,18 +379,7 @@ namespace MQTTnet.Implementations
 
         X509CertificateCollection LoadCertificates()
         {
-            if (_tcpOptions.TlsOptions.Certificates == null)
-            {
-                return null;
-            }
-
-            var certificates = new X509CertificateCollection();
-            foreach (var certificate in _tcpOptions.TlsOptions.Certificates)
-            {
-                certificates.Add(certificate);
-            }
-
-            return certificates;
+            return _tcpOptions.TlsOptions.ClientCertificatesProvider?.GetCertificates();
         }
     }
 }

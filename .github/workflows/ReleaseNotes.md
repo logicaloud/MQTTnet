@@ -1,3 +1,5 @@
-* [Client] Fixed _PlatformNotSupportedException_ when using Blazor (#1755, thanks to @Nickztar).
-* [Server] Fixed _NullReferenceException_ in retained messages management (#1762, thanks to @logicaloud).
-* [Server] Exposed new option which allows disabling packet fragmentation (#1753).
+* Core: Fixed issue when parsing AUTH packet with 0 length body (#2039).
+* nuget: Changed code signing and nuget certificate (**BREAKING CHANGE**).
+* TopicTemplates: Updated samples, parameter validation (#2022).
+* ManagedClient: Switch SubscribeAsync/UnsubscribeAsync to IEnumerable<string> (#2026).
+* Server: Fix _LoadingRetainedMessageAsync_ not executed (#2025).

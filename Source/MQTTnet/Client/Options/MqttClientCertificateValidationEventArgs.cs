@@ -10,12 +10,27 @@ namespace MQTTnet.Client
 {
     public sealed class MqttClientCertificateValidationEventArgs : EventArgs
     {
-        public X509Certificate Certificate { get; set; }
+        public MqttClientCertificateValidationEventArgs(X509Certificate certificate, X509Chain chain, SslPolicyErrors sslPolicyErrors, IMqttClientChannelOptions clientOptions)
+        {
+            Certificate = certificate;
+            Chain = chain;
+            SslPolicyErrors = sslPolicyErrors;
+            ClientOptions = clientOptions ?? throw new ArgumentNullException(nameof(clientOptions));
+        }
 
-        public X509Chain Chain { get; set; }
+        public X509Certificate Certificate { get; }
 
-        public SslPolicyErrors SslPolicyErrors { get; set; }
+        public X509Chain Chain { get; }
 
-        public IMqttClientChannelOptions ClientOptions { get; set; }
+        public IMqttClientChannelOptions ClientOptions { get; }
+
+#if NET452 || NET461 || NET48
+        /// <summary>
+        ///     Can be a host string name or an object derived from WebRequest.
+        /// </summary>
+        public object Sender { get; set; }
+#endif
+
+        public SslPolicyErrors SslPolicyErrors { get; }
     }
 }

@@ -2,9 +2,13 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+#pragma warning disable CS0612 // Type or member is obsolete
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using MQTTnet.Formatter;
 using MQTTnet.Packets;
@@ -15,10 +19,16 @@ namespace MQTTnet.Client
     public sealed class MqttClientOptionsBuilder
     {
         readonly MqttClientOptions _options = new MqttClientOptions();
-        MqttClientWebSocketProxyOptions _proxyOptions;
+        int? _port;
+
+        [Obsolete] MqttClientWebSocketProxyOptions _proxyOptions;
+        EndPoint _remoteEndPoint;
 
         MqttClientTcpOptions _tcpOptions;
-        MqttClientOptionsBuilderTlsParameters _tlsParameters;
+        MqttClientTlsOptions _tlsOptions;
+
+        [Obsolete] MqttClientOptionsBuilderTlsParameters _tlsParameters;
+
         MqttClientWebSocketOptions _webSocketOptions;
 
         public MqttClientOptions Build()
@@ -28,11 +38,17 @@ namespace MQTTnet.Client
                 throw new InvalidOperationException("A channel must be set.");
             }
 
+            // The user can specify the TCP options with already configured TLS options
+            // or start with TLS settings not knowing which transport will be used (depending
+            // on the order of called methods from the builder).
+            // The builder prefers the explicitly set TLS options!
+            var tlsOptions = _tlsOptions ?? _tcpOptions?.TlsOptions;
+
             if (_tlsParameters != null)
             {
                 if (_tlsParameters?.UseTls == true)
                 {
-                    var tlsOptions = new MqttClientTlsOptions
+                    tlsOptions = new MqttClientTlsOptions
                     {
                         UseTls = true,
                         SslProtocol = _tlsParameters.SslProtocol,
@@ -40,26 +56,61 @@ namespace MQTTnet.Client
                         CertificateValidationHandler = _tlsParameters.CertificateValidationHandler,
                         IgnoreCertificateChainErrors = _tlsParameters.IgnoreCertificateChainErrors,
                         IgnoreCertificateRevocationErrors = _tlsParameters.IgnoreCertificateRevocationErrors,
-#if WINDOWS_UWP
-                        Certificates = _tlsParameters.Certificates?.Select(c => c.ToArray()).ToList(),
-#else
-                        Certificates = _tlsParameters.Certificates?.ToList(),
-#endif
-
+                        ClientCertificatesProvider = _tlsParameters.CertificatesProvider,
 #if NETCOREAPP3_1_OR_GREATER
                         ApplicationProtocols = _tlsParameters.ApplicationProtocols,
 #endif
                     };
+                }
+            }
 
-                    if (_tcpOptions != null)
+            if (_tcpOptions != null)
+            {
+                _tcpOptions.TlsOptions = tlsOptions;
+
+                if (_remoteEndPoint == null)
+                {
+                    throw new ArgumentException("No endpoint is set.");
+                }
+
+                if (_remoteEndPoint is DnsEndPoint dns)
+                {
+                    if (dns.Port == 0)
                     {
-                        _tcpOptions.TlsOptions = tlsOptions;
-                    }
-                    else if (_webSocketOptions != null)
-                    {
-                        _webSocketOptions.TlsOptions = tlsOptions;
+                        if (_port.HasValue)
+                        {
+                            _remoteEndPoint = new DnsEndPoint(dns.Host, _port.Value, dns.AddressFamily);
+                        }
+                        else
+                        {
+                            _remoteEndPoint = new DnsEndPoint(dns.Host, tlsOptions?.UseTls == false ? MqttPorts.Default : MqttPorts.Secure, dns.AddressFamily);
+                        }
                     }
                 }
+
+                if (_remoteEndPoint is IPEndPoint ip)
+                {
+                    if (ip.Port == 0)
+                    {
+                        if (_port.HasValue)
+                        {
+                            _remoteEndPoint = new IPEndPoint(ip.Address, _port.Value);
+                        }
+                        else
+                        {
+                            _remoteEndPoint = new IPEndPoint(ip.Address, tlsOptions?.UseTls == false ? MqttPorts.Default : MqttPorts.Secure);
+                        }
+                    }
+                }
+
+                if (_tcpOptions.RemoteEndpoint == null)
+                {
+                    _tcpOptions.RemoteEndpoint = _remoteEndPoint;
+                }
+            }
+            else if (_webSocketOptions != null)
+            {
+                _webSocketOptions.TlsOptions = tlsOptions;
             }
 
             if (_proxyOptions != null)
@@ -78,17 +129,13 @@ namespace MQTTnet.Client
 
             return _options;
         }
-        
-        /// <summary>
-        /// The client will not throw an exception when the MQTT server responses with a non success ACK packet.
-        /// This will become the default behavior in future versions of the library.
-        /// </summary>
-        public MqttClientOptionsBuilder WithoutThrowOnNonSuccessfulConnectResponse()
+
+        public MqttClientOptionsBuilder WithAddressFamily(AddressFamily addressFamily)
         {
-            _options.ThrowOnNonSuccessfulConnectResponse = false;
+            _tcpOptions.AddressFamily = addressFamily;
             return this;
         }
-        
+
         public MqttClientOptionsBuilder WithAuthentication(string method, byte[] data)
         {
             _options.AuthenticationMethod = method;
@@ -136,12 +183,16 @@ namespace MQTTnet.Client
                     break;
 
                 case "mqtts":
-                    WithTcpServer(uri.Host, port).WithTls();
+                    WithTcpServer(uri.Host, port)
+                        .WithTlsOptions(
+                            o =>
+                            {
+                            });
                     break;
 
                 case "ws":
                 case "wss":
-                    WithWebSocketServer(uri.ToString());
+                    WithWebSocketServer(o => o.WithUri(uri.ToString()));
                     break;
 
                 default:
@@ -187,6 +238,14 @@ namespace MQTTnet.Client
             return this;
         }
 
+        public MqttClientOptionsBuilder WithEndPoint(EndPoint endPoint)
+        {
+            _remoteEndPoint = endPoint ?? throw new ArgumentNullException(nameof(endPoint));
+            _tcpOptions = new MqttClientTcpOptions();
+
+            return this;
+        }
+
         public MqttClientOptionsBuilder WithExtendedAuthenticationExchangeHandler(IMqttExtendedAuthenticationExchangeHandler handler)
         {
             _options.ExtendedAuthenticationExchangeHandler = handler;
@@ -222,6 +281,22 @@ namespace MQTTnet.Client
             return this;
         }
 
+        /// <summary>
+        ///     The client will not throw an exception when the MQTT server responds with a non success ACK packet.
+        ///     This will become the default behavior in future versions of the library.
+        /// </summary>
+        public MqttClientOptionsBuilder WithoutThrowOnNonSuccessfulConnectResponse()
+        {
+            _options.ThrowOnNonSuccessfulConnectResponse = false;
+            return this;
+        }
+
+        public MqttClientOptionsBuilder WithProtocolType(ProtocolType protocolType)
+        {
+            _tcpOptions.ProtocolType = protocolType;
+            return this;
+        }
+
         public MqttClientOptionsBuilder WithProtocolVersion(MqttProtocolVersion value)
         {
             if (value == MqttProtocolVersion.Unknown)
@@ -233,6 +308,7 @@ namespace MQTTnet.Client
             return this;
         }
 
+        [Obsolete("Use WithWebSocketServer(... configure) instead.")]
         public MqttClientOptionsBuilder WithProxy(
             string address,
             string username = null,
@@ -254,6 +330,7 @@ namespace MQTTnet.Client
             return this;
         }
 
+        [Obsolete("Use WithWebSocketServer(... configure) instead.")]
         public MqttClientOptionsBuilder WithProxy(Action<MqttClientWebSocketProxyOptions> optionsBuilder)
         {
             if (optionsBuilder == null)
@@ -290,13 +367,19 @@ namespace MQTTnet.Client
             return this;
         }
 
-        public MqttClientOptionsBuilder WithTcpServer(string server, int? port = null)
+        public MqttClientOptionsBuilder WithTcpServer(string host, int? port = null, AddressFamily addressFamily = AddressFamily.Unspecified)
         {
-            _tcpOptions = new MqttClientTcpOptions
+            if (host == null)
             {
-                Server = server,
-                Port = port
-            };
+                throw new ArgumentNullException(nameof(host));
+            }
+
+            _tcpOptions = new MqttClientTcpOptions();
+
+            // The value 0 will be updated when building the options.
+            // This a backward compatibility feature.
+            _remoteEndPoint = new DnsEndPoint(host, port ?? 0, addressFamily);
+            _port = port;
 
             return this;
         }
@@ -324,17 +407,20 @@ namespace MQTTnet.Client
             return this;
         }
 
+        [Obsolete("Use WithTlsOptions(... configure) instead.")]
         public MqttClientOptionsBuilder WithTls(MqttClientOptionsBuilderTlsParameters parameters)
         {
             _tlsParameters = parameters;
             return this;
         }
 
+        [Obsolete("Use WithTlsOptions(... configure) instead.")]
         public MqttClientOptionsBuilder WithTls()
         {
             return WithTls(new MqttClientOptionsBuilderTlsParameters { UseTls = true });
         }
 
+        [Obsolete("Use WithTlsOptions(... configure) instead.")]
         public MqttClientOptionsBuilder WithTls(Action<MqttClientOptionsBuilderTlsParameters> optionsBuilder)
         {
             if (optionsBuilder == null)
@@ -348,6 +434,26 @@ namespace MQTTnet.Client
             };
 
             optionsBuilder(_tlsParameters);
+            return this;
+        }
+
+        public MqttClientOptionsBuilder WithTlsOptions(MqttClientTlsOptions tlsOptions)
+        {
+            _tlsOptions = tlsOptions;
+            return this;
+        }
+
+        public MqttClientOptionsBuilder WithTlsOptions(Action<MqttClientTlsOptionsBuilder> configure)
+        {
+            if (configure == null)
+            {
+                throw new ArgumentNullException(nameof(configure));
+            }
+
+            var builder = new MqttClientTlsOptionsBuilder();
+            configure.Invoke(builder);
+
+            _tlsOptions = builder.Build();
             return this;
         }
 
@@ -382,6 +488,7 @@ namespace MQTTnet.Client
             return this;
         }
 
+        [Obsolete("Use WithWebSocketServer(... configure) instead.")]
         public MqttClientOptionsBuilder WithWebSocketServer(string uri, MqttClientOptionsBuilderWebSocketParameters parameters = null)
         {
             _webSocketOptions = new MqttClientWebSocketOptions
@@ -394,6 +501,21 @@ namespace MQTTnet.Client
             return this;
         }
 
+        public MqttClientOptionsBuilder WithWebSocketServer(Action<MqttClientWebSocketOptionsBuilder> configure)
+        {
+            if (configure == null)
+            {
+                throw new ArgumentNullException(nameof(configure));
+            }
+
+            var webSocketOptionsBuilder = new MqttClientWebSocketOptionsBuilder();
+            configure.Invoke(webSocketOptionsBuilder);
+
+            _webSocketOptions = webSocketOptionsBuilder.Build();
+            return this;
+        }
+
+        [Obsolete("Use WithWebSocketServer(... configure) instead.")]
         public MqttClientOptionsBuilder WithWebSocketServer(Action<MqttClientWebSocketOptions> optionsBuilder)
         {
             if (optionsBuilder == null)
@@ -422,6 +544,12 @@ namespace MQTTnet.Client
         public MqttClientOptionsBuilder WithWillDelayInterval(uint willDelayInterval)
         {
             _options.WillDelayInterval = willDelayInterval;
+            return this;
+        }
+
+        public MqttClientOptionsBuilder WithWillMessageExpiryInterval(uint willMessageExpiryInterval)
+        {
+            _options.WillMessageExpiryInterval = willMessageExpiryInterval;
             return this;
         }
 

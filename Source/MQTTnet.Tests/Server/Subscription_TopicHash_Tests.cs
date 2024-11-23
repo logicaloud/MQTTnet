@@ -1,14 +1,14 @@
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+using MQTTnet.Packets;
+using MQTTnet.Protocol;
+using MQTTnet.Server;
+using MQTTnet.Tests.Mockups;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
-using MQTTnet.Packets;
-using MQTTnet.Protocol;
-using MQTTnet.Server;
-using MQTTnet.Tests.Mockups;
 
 namespace MQTTnet.Tests.Server
 {
@@ -559,10 +559,10 @@ namespace MQTTnet.Tests.Server
             var persistedSessionManager = new MqttPersistedSessionManager(eventContainer, logger);
             var sessionManager = new MqttClientSessionsManager(serverOptions, retainedMessagesManager, persistedSessionManager, eventContainer, logger);
             _clientSession = new MQTTnet.Server.MqttSession(
-                        clientId,
                         false,
                         0,
                         0,
+                        new MqttConnectPacket { ClientId = clientId },
                         new Dictionary<object, object>(),
                         serverOptions,
                         eventContainer,

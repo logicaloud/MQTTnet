@@ -2,16 +2,16 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using MQTTnet.Client;
+using MQTTnet.Internal;
+using MQTTnet.Packets;
+using MQTTnet.Protocol;
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using MQTTnet.Client;
-using MQTTnet.Internal;
-using MQTTnet.Packets;
-using MQTTnet.Protocol;
 
 namespace MQTTnet.Server
 {
@@ -19,9 +19,11 @@ namespace MQTTnet.Server
     {
         readonly MqttClientSessionsManager _clientSessionsManager;
         readonly MqttPersistedSessionManager _persistedSessionManager;
+        readonly MqttServerEventContainer _eventContainer;
         readonly MqttPacketBus _packetBus = new MqttPacketBus();
         readonly MqttPacketIdentifierProvider _packetIdentifierProvider = new MqttPacketIdentifierProvider();
 
+        readonly MqttConnectPacket _connectPacket;
         readonly MqttServerOptions _serverOptions;
         readonly MqttClientSubscriptionsManager _subscriptionsManager;
 
@@ -32,10 +34,10 @@ namespace MQTTnet.Server
         HashSet<string> _subscribedTopics;
 
         public MqttSession(
-            string clientId,
             bool isPersistent,
             uint sessionExpiryInterval, // only valid for MQTT5 clients
             uint willDelayInterval, // only valid for MQTT 5 clients
+            MqttConnectPacket connectPacket,
             IDictionary items,
             MqttServerOptions serverOptions,
             MqttServerEventContainer eventContainer,
@@ -43,23 +45,28 @@ namespace MQTTnet.Server
             MqttPersistedSessionManager persistedSessionManager,
             MqttClientSessionsManager clientSessionsManager)
         {
-            Id = clientId ?? throw new ArgumentNullException(nameof(clientId));
             IsPersistent = isPersistent;
             SessionExpiryInterval = sessionExpiryInterval;
             WillDelayInterval = willDelayInterval;
             Items = items ?? throw new ArgumentNullException(nameof(items));
 
+            _connectPacket = connectPacket ?? throw new ArgumentNullException(nameof(connectPacket));
             _serverOptions = serverOptions ?? throw new ArgumentNullException(nameof(serverOptions));
             _clientSessionsManager = clientSessionsManager ?? throw new ArgumentNullException(nameof(clientSessionsManager));
             _subscriptionsManager = new MqttClientSubscriptionsManager(this, eventContainer, retainedMessagesManager, persistedSessionManager, clientSessionsManager);
             _persistedSessionManager = persistedSessionManager ?? throw new ArgumentNullException(nameof(_persistedSessionManager));
+            _eventContainer = eventContainer ?? throw new ArgumentNullException(nameof(eventContainer));
         }
 
         public DateTime CreatedTimestamp { get; } = DateTime.UtcNow;
 
+        public DateTime? DisconnectedTimestamp { get; set; }
+
         public bool HasSubscribedTopics => _subscribedTopics != null && _subscribedTopics.Count > 0;
 
-        public string Id { get; }
+        public uint ExpiryInterval => _connectPacket.SessionExpiryInterval;
+
+        public string Id => _connectPacket.ClientId;
 
         /// <summary>
         ///     Session should persist if CleanSession was set to false (Mqtt3) or if SessionExpiryInterval != 0 (Mqtt5)
@@ -84,14 +91,14 @@ namespace MQTTnet.Server
 
         //public MqttPublishPacket PeekAcknowledgePublishPacket(ushort packetIdentifier)
         //{
-            // This will only return the matching PUBLISH packet but does not remove it.
-            // This is required for QoS 2.
+        // This will only return the matching PUBLISH packet but does not remove it.
+        // This is required for QoS 2.
         //    _unacknowledgedPublishPackets.TryGetValue(packetIdentifier, out var publishPacket);
         //    return publishPacket;
         //}
 
         public async Task<MqttPublishPacket> AcknowledgePublishPacketAsync(ushort packetIdentifier)
-        {            
+        {
             MqttPublishPacket publishPacket = null;
 
             lock (_unacknowledgedPublishPackets)
@@ -137,20 +144,25 @@ namespace MQTTnet.Server
             _packetBus.EnqueueItem(packetBusItem, MqttPacketBusPartition.Control);
         }
 
-        public void EnqueueDataPacket(MqttPacketBusItem packetBusItem)
+        public EnqueueDataPacketResult EnqueueDataPacket(MqttPacketBusItem packetBusItem)
         {
             if (_packetBus.ItemsCount(MqttPacketBusPartition.Data) >= _serverOptions.MaxPendingMessagesPerClient)
             {
                 if (_serverOptions.PendingMessagesOverflowStrategy == MqttPendingMessagesOverflowStrategy.DropNewMessage)
                 {
-                    return;
+                    return EnqueueDataPacketResult.Dropped;
                 }
 
                 if (_serverOptions.PendingMessagesOverflowStrategy == MqttPendingMessagesOverflowStrategy.DropOldestQueuedMessage)
                 {
                     // Only drop from the data partition. Dropping from control partition might break the connection
                     // because the client does not receive PINGREQ packets etc. any longer.
-                    _packetBus.DropFirstItem(MqttPacketBusPartition.Data);
+                    var firstItem = _packetBus.DropFirstItem(MqttPacketBusPartition.Data);
+                    if (firstItem != null && _eventContainer.QueuedApplicationMessageOverwrittenEvent.HasHandlers)
+                    {
+                        var eventArgs = new QueueMessageOverwrittenEventArgs(Id, firstItem.Packet);
+                        _eventContainer.QueuedApplicationMessageOverwrittenEvent.InvokeAsync(eventArgs).ConfigureAwait(false);
+                    }
                 }
             }
 
@@ -168,6 +180,7 @@ namespace MQTTnet.Server
             }
 
             _packetBus.EnqueueItem(packetBusItem, MqttPacketBusPartition.Data);
+            return EnqueueDataPacketResult.Enqueued;
         }
 
         public void EnqueueHealthPacket(MqttPacketBusItem packetBusItem)
@@ -190,7 +203,7 @@ namespace MQTTnet.Server
             // TODO: Keep the bus and only insert pending items again.
             // TODO: Check if packet identifier must be restarted or not.
             // TODO: Recover package identifier.
-            
+
             /*
                 The Session state in the Client consists of:
                 ·         QoS 1 and QoS 2 messages which have been sent to the Server, but have not been completely acknowledged.
@@ -211,7 +224,7 @@ namespace MQTTnet.Server
             lock (_unacknowledgedPublishPackets)
             {
                 unacknowledgedPublishPackets = _unacknowledgedPublishPackets.ToList();
-                _unacknowledgedPublishPackets.Clear();    
+                _unacknowledgedPublishPackets.Clear();
             }
 
             _packetBus.Clear();

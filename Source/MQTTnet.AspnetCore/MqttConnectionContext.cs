@@ -33,8 +33,11 @@ namespace MQTTnet.AspNetCore
             PacketFormatterAdapter = packetFormatterAdapter ?? throw new ArgumentNullException(nameof(packetFormatterAdapter));
             _connection = connection ?? throw new ArgumentNullException(nameof(connection));
 
-            _input = connection.Transport.Input;
-            _output = connection.Transport.Output;
+            if (!(_connection is SocketConnection tcp) || tcp.IsConnected)
+            {
+                _input = connection.Transport.Input;
+                _output = connection.Transport.Output;
+            }
         }
 
         public long BytesReceived { get; private set; }
@@ -80,8 +83,6 @@ namespace MQTTnet.AspNetCore
             }
         }
 
-        public bool IsReadingPacket { get; private set; }
-
         public bool IsSecureConnection
         {
             get
@@ -108,7 +109,7 @@ namespace MQTTnet.AspNetCore
 
         public async Task ConnectAsync(CancellationToken cancellationToken)
         {
-            if (_connection is TcpConnection tcp && !tcp.IsConnected)
+            if (_connection is SocketConnection tcp && !tcp.IsConnected)
             {
                 await tcp.StartAsync().ConfigureAwait(false);
             }
@@ -161,11 +162,6 @@ namespace MQTTnet.AspNetCore
                                 BytesReceived += received;
                                 return packet;
                             }
-                            else
-                            {
-                                // we did receive something but the message is not yet complete
-                                IsReadingPacket = true;
-                            }
                         }
                         else if (readResult.IsCompleted)
                         {
@@ -186,11 +182,8 @@ namespace MQTTnet.AspNetCore
                 // completing the channel makes sure that there is no more data read after a protocol error
                 _input?.Complete(exception);
                 _output?.Complete(exception);
+
                 throw;
-            }
-            finally
-            {
-                IsReadingPacket = false;
             }
 
             cancellationToken.ThrowIfCancellationRequested();

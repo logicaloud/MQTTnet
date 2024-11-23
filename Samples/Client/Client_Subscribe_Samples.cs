@@ -5,9 +5,10 @@
 // ReSharper disable UnusedType.Global
 // ReSharper disable UnusedMember.Global
 // ReSharper disable InconsistentNaming
+// ReSharper disable UnusedMember.Local
 
-using MQTTnet;
 using MQTTnet.Client;
+using MQTTnet.Extensions.TopicTemplate;
 using MQTTnet.Packets;
 using MQTTnet.Protocol;
 using MQTTnet.Samples.Helpers;
@@ -16,6 +17,8 @@ namespace MQTTnet.Samples.Client;
 
 public static class Client_Subscribe_Samples
 {
+    static MqttTopicTemplate sampleTemplate = new MqttTopicTemplate("mqttnet/samples/topic/{id}");
+    
     public static async Task Handle_Received_Application_Message()
     {
         /*
@@ -42,11 +45,7 @@ public static class Client_Subscribe_Samples
             await mqttClient.ConnectAsync(mqttClientOptions, CancellationToken.None);
 
             var mqttSubscribeOptions = mqttFactory.CreateSubscribeOptionsBuilder()
-                .WithTopicFilter(
-                    f =>
-                    {
-                        f.WithTopic("mqttnet/samples/topic/2");
-                    })
+                .WithTopicTemplate(sampleTemplate.WithParameter("id", "2"))
                 .Build();
 
             await mqttClient.SubscribeAsync(mqttSubscribeOptions, CancellationToken.None);
@@ -88,11 +87,8 @@ public static class Client_Subscribe_Samples
             await mqttClient.ConnectAsync(mqttClientOptions, CancellationToken.None);
 
             var mqttSubscribeOptions = mqttFactory.CreateSubscribeOptionsBuilder()
-                .WithTopicFilter(
-                    f =>
-                    {
-                        f.WithTopic("mqttnet/samples/topic/1");
-                    })
+                .WithTopicTemplate(
+                    sampleTemplate.WithParameter("id", "1"))
                 .Build();
 
             var response = await mqttClient.SubscribeAsync(mqttSubscribeOptions, CancellationToken.None);
@@ -121,21 +117,12 @@ public static class Client_Subscribe_Samples
             // Create the subscribe options including several topics with different options.
             // It is also possible to all of these topics using a dedicated call of _SubscribeAsync_ per topic.
             var mqttSubscribeOptions = mqttFactory.CreateSubscribeOptionsBuilder()
-                .WithTopicFilter(
-                    f =>
-                    {
-                        f.WithTopic("mqttnet/samples/topic/1");
-                    })
-                .WithTopicFilter(
-                    f =>
-                    {
-                        f.WithTopic("mqttnet/samples/topic/2").WithNoLocal();
-                    })
-                .WithTopicFilter(
-                    f =>
-                    {
-                        f.WithTopic("mqttnet/samples/topic/3").WithRetainHandling(MqttRetainHandling.SendAtSubscribe);
-                    })
+                .WithTopicTemplate(
+                    sampleTemplate.WithParameter("id", "1"))
+                .WithTopicTemplate(
+                    sampleTemplate.WithParameter("id", "2"), noLocal: true)
+                .WithTopicTemplate(
+                    sampleTemplate.WithParameter("id", "3"), retainHandling: MqttRetainHandling.SendAtSubscribe)
                 .Build();
 
             var response = await mqttClient.SubscribeAsync(mqttSubscribeOptions, CancellationToken.None);
@@ -162,11 +149,7 @@ public static class Client_Subscribe_Samples
             await mqttClient.ConnectAsync(mqttClientOptions, CancellationToken.None);
 
             var mqttSubscribeOptions = mqttFactory.CreateSubscribeOptionsBuilder()
-                .WithTopicFilter(
-                    f =>
-                    {
-                        f.WithTopic("mqttnet/samples/topic/1");
-                    })
+                .WithTopicTemplate(sampleTemplate.WithParameter("id", "1"))
                 .Build();
 
             var response = await mqttClient.SubscribeAsync(mqttSubscribeOptions, CancellationToken.None);
@@ -176,5 +159,63 @@ public static class Client_Subscribe_Samples
             // The response contains additional data sent by the server after subscribing.
             response.DumpToConsole();
         }
+    }
+
+    static void ConcurrentProcessingDisableAutoAcknowledge(CancellationToken shutdownToken, IMqttClient mqttClient)
+    {
+        /*
+         * This sample shows how to achieve concurrent processing and not have message AutoAcknowledged
+         * This to have a proper QoS1 (at-least-once) experience for what at least MQTT specification can provide
+         */
+        mqttClient.ApplicationMessageReceivedAsync += ea =>
+        {
+            ea.AutoAcknowledge = false;
+
+            async Task ProcessAsync()
+            {
+                // DO YOUR WORK HERE!
+                await Task.Delay(1000, shutdownToken);
+                await ea.AcknowledgeAsync(shutdownToken);
+                // WARNING: If process failures are not transient the message will be retried on every restart of the client
+                //          A failed message will not be dispatched again to the client as MQTT does not have a NACK packet to let
+                //          the broker know processing failed
+                //
+                // Optionally: Use a framework like Polly to create a retry policy: https://github.com/App-vNext/Polly#retry
+            }
+
+            _ = Task.Run(ProcessAsync, shutdownToken);
+
+            return Task.CompletedTask;
+        };
+    }
+
+    static void ConcurrentProcessingWithLimit(CancellationToken shutdownToken, IMqttClient mqttClient)
+    {
+        /*
+         * This sample shows how to achieve concurrent processing, with:
+         * - a maximum concurrency limit based on Environment.ProcessorCount
+         */
+
+        var concurrent = new SemaphoreSlim(Environment.ProcessorCount);
+
+        mqttClient.ApplicationMessageReceivedAsync += async ea =>
+        {
+            await concurrent.WaitAsync(shutdownToken).ConfigureAwait(false);
+
+            async Task ProcessAsync()
+            {
+                try
+                {
+                    // DO YOUR WORK HERE!
+                    await Task.Delay(1000, shutdownToken);
+                }
+                finally
+                {
+                    concurrent.Release();
+                }
+            }
+
+            _ = Task.Run(ProcessAsync, shutdownToken);
+        };
     }
 }

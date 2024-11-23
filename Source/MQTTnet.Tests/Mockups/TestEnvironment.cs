@@ -25,7 +25,6 @@ namespace MQTTnet.Tests.Mockups
     {
         readonly List<string> _clientErrors = new List<string>();
         readonly List<IMqttClient> _clients = new List<IMqttClient>();
-
         readonly List<Exception> _exceptions = new List<Exception>();
         readonly List<ILowLevelMqttClient> _lowLevelClients = new List<ILowLevelMqttClient>();
         readonly MqttProtocolVersion _protocolVersion;
@@ -39,6 +38,8 @@ namespace MQTTnet.Tests.Mockups
         {
             _protocolVersion = protocolVersion;
             TestContext = testContext;
+
+            TaskScheduler.UnobservedTaskException += TrackUnobservedTaskException;
 
             ServerLogger.LogMessagePublished += (s, e) =>
             {
@@ -65,9 +66,12 @@ namespace MQTTnet.Tests.Mockups
 
                 if (e.LogMessage.Level == MqttNetLogLevel.Error)
                 {
-                    lock (_clientErrors)
+                    if (!IgnoreClientLogErrors)
                     {
-                        _clientErrors.Add(e.LogMessage.ToString());
+                        lock (_clientErrors)
+                        {
+                            _clientErrors.Add(e.LogMessage.ToString());
+                        }
                     }
                 }
             };
@@ -212,30 +216,31 @@ namespace MQTTnet.Tests.Mockups
 
         public IMqttClient CreateClient()
         {
+            var logger = EnableLogger ? (IMqttNetLogger)ClientLogger : MqttNetNullLogger.Instance;
+
+            var client = Factory.CreateMqttClient(logger);
+
+            client.ConnectingAsync += e =>
+            {
+                if (TestContext != null)
+                {
+                    var clientOptions = e.ClientOptions;
+                    var existingClientId = clientOptions.ClientId;
+                    if (existingClientId != null && !existingClientId.StartsWith(TestContext.TestName))
+                    {
+                        clientOptions.ClientId = TestContext.TestName + "_" + existingClientId;
+                    }
+                }
+
+                return CompletedTask.Instance;
+            };
+
             lock (_clients)
             {
-                var logger = EnableLogger ? (IMqttNetLogger)ClientLogger : new MqttNetNullLogger();
-
-                var client = Factory.CreateMqttClient(logger);
                 _clients.Add(client);
-
-                client.ConnectingAsync += e =>
-                {
-                    if (TestContext != null)
-                    {
-                        var clientOptions = e.ClientOptions;
-                        var existingClientId = clientOptions.ClientId;
-                        if (existingClientId != null && !existingClientId.StartsWith(TestContext.TestName))
-                        {
-                            clientOptions.ClientId = TestContext.TestName + "_" + existingClientId;
-                        }
-                    }
-
-                    return CompletedTask.Instance;
-                };
-
-                return client;
             }
+
+            return client;
         }
 
         public MqttClientOptions CreateDefaultClientOptions()
@@ -245,18 +250,22 @@ namespace MQTTnet.Tests.Mockups
 
         public MqttClientOptionsBuilder CreateDefaultClientOptionsBuilder()
         {
-            return Factory.CreateClientOptionsBuilder().WithProtocolVersion(_protocolVersion).WithTcpServer("127.0.0.1", ServerPort).WithClientId(TestContext.TestName + "_" + Guid.NewGuid());
+            return Factory.CreateClientOptionsBuilder()
+                .WithProtocolVersion(_protocolVersion)
+                .WithTcpServer("127.0.0.1", ServerPort)
+                .WithClientId(TestContext.TestName + "_" + Guid.NewGuid());
         }
 
         public ILowLevelMqttClient CreateLowLevelClient()
         {
-            lock (_clients)
-            {
-                var client = Factory.CreateLowLevelMqttClient(ClientLogger);
-                _lowLevelClients.Add(client);
+            var client = Factory.CreateLowLevelMqttClient(ClientLogger);
 
-                return client;
+            lock (_lowLevelClients)
+            {
+                _lowLevelClients.Add(client);
             }
+
+            return client;
         }
 
         public MqttServer CreateServer(MqttServerOptions options)
@@ -290,45 +299,68 @@ namespace MQTTnet.Tests.Mockups
 
         public void Dispose()
         {
-            foreach (var mqttClient in _clients)
+            try
             {
+                lock (_clients)
+                {
+                    foreach (var mqttClient in _clients)
+                    {
+                        try
+                        {
+                            //mqttClient.DisconnectAsync().GetAwaiter().GetResult();
+                        }
+                        catch
+                        {
+                            // This can happen when the test already disconnected the client.
+                        }
+                        finally
+                        {
+                            mqttClient?.Dispose();
+                        }
+                    }
+
+                    _clients.Clear();
+                }
+
+                lock (_lowLevelClients)
+                {
+                    foreach (var lowLevelMqttClient in _lowLevelClients)
+                    {
+                        lowLevelMqttClient.Dispose();
+                    }
+
+                    _lowLevelClients.Clear();
+                }
+
                 try
                 {
-                    //mqttClient.DisconnectAsync().GetAwaiter().GetResult();
+                    Server?.StopAsync().GetAwaiter().GetResult();
                 }
                 catch
                 {
-                    // This can happen when the test already disconnected the client.
+                    // This can happen when the test already stopped the server.
                 }
                 finally
                 {
-                    mqttClient?.Dispose();
+                    Server?.Dispose();
                 }
-            }
 
-            foreach (var lowLevelMqttClient in _lowLevelClients)
-            {
-                lowLevelMqttClient.Dispose();
-            }
+                Server = null;
 
-            try
-            {
-                Server?.StopAsync().GetAwaiter().GetResult();
-            }
-            catch
-            {
-                // This can happen when the test already stopped the server.
+                ThrowIfLogErrors();
+
+                GC.Collect();
+                GC.WaitForFullGCComplete();
+                GC.WaitForPendingFinalizers();
+                
+                if (_exceptions.Any())
+                {
+                    throw new Exception($"{_exceptions.Count} exceptions tracked.\r\n" + string.Join(Environment.NewLine, _exceptions));
+                }
             }
             finally
             {
-                Server?.Dispose();
-            }
-
-            ThrowIfLogErrors();
-
-            if (_exceptions.Any())
-            {
-                throw new Exception($"{_exceptions.Count} exceptions tracked.\r\n" + string.Join(Environment.NewLine, _exceptions));
+                TaskScheduler.UnobservedTaskException -= TrackUnobservedTaskException;
             }
         }
 
@@ -345,7 +377,7 @@ namespace MQTTnet.Tests.Mockups
 
             var options = optionsBuilder.Build();
             var server = CreateServer(options);
-            await server.StartAsync();
+            await server.StartAsync().ConfigureAwait(false);
 
             // The OS has chosen the port to we have to properly expose it to the tests.
             ServerPort = options.DefaultEndpointOptions.Port;
@@ -373,33 +405,49 @@ namespace MQTTnet.Tests.Mockups
 
         public void ThrowIfLogErrors()
         {
-            lock (_serverErrors)
+            if (!IgnoreServerLogErrors)
             {
-                if (!IgnoreServerLogErrors && _serverErrors.Count > 0)
+                lock (_serverErrors)
                 {
-                    var message = $"Server had {_serverErrors.Count} errors (${string.Join(Environment.NewLine, _serverErrors)}).";
-                    Console.WriteLine(message);
-                    throw new Exception(message);
+                    if (_serverErrors.Count > 0)
+                    {
+                        var message = $"Server had {_serverErrors.Count} errors (${string.Join(Environment.NewLine, _serverErrors)}).";
+                        Console.WriteLine(message);
+                        throw new Exception(message);
+                    }
                 }
             }
 
-            lock (_clientErrors)
+            if (!IgnoreClientLogErrors)
             {
-                if (!IgnoreClientLogErrors && _clientErrors.Count > 0)
+                lock (_clientErrors)
                 {
-                    var message = $"Client(s) had {_clientErrors.Count} errors (${string.Join(Environment.NewLine, _clientErrors)})";
-                    Console.WriteLine(message);
-                    throw new Exception(message);
+                    if (_clientErrors.Count > 0)
+                    {
+                        var message = $"Client(s) had {_clientErrors.Count} errors (${string.Join(Environment.NewLine, _clientErrors)})";
+                        Console.WriteLine(message);
+                        throw new Exception(message);
+                    }
                 }
             }
         }
 
         public void TrackException(Exception exception)
         {
+            if (exception == null)
+            {
+                return;
+            }
+
             lock (_exceptions)
             {
                 _exceptions.Add(exception);
             }
+        }
+
+        void TrackUnobservedTaskException(object sender, UnobservedTaskExceptionEventArgs e)
+        {
+            TrackException(e.Exception);
         }
     }
 }

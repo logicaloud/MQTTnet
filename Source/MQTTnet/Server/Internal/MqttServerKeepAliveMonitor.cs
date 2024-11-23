@@ -8,11 +8,20 @@ using System.Threading.Tasks;
 using MQTTnet.Diagnostics;
 using MQTTnet.Internal;
 using MQTTnet.Protocol;
+using MQTTnet.Server.Disconnecting;
 
 namespace MQTTnet.Server
 {
     public sealed class MqttServerKeepAliveMonitor
     {
+        static readonly MqttServerClientDisconnectOptions DefaultDisconnectOptions = new MqttServerClientDisconnectOptions
+        {
+            ReasonCode = MqttDisconnectReasonCode.KeepAliveTimeout,
+            UserProperties = null,
+            ReasonString = null,
+            ServerReference = null
+        };
+
         readonly MqttNetSourceLogger _logger;
         readonly MqttServerOptions _options;
         readonly MqttClientSessionsManager _sessionsManager;
@@ -43,12 +52,12 @@ namespace MQTTnet.Server
         {
             try
             {
-                _logger.Info("Starting keep alive monitor.");
+                _logger.Info("Starting keep alive monitor");
 
                 while (!cancellationToken.IsCancellationRequested)
                 {
                     TryProcessClients();
-                    Sleep(_options.KeepAliveMonitorInterval);
+                    Sleep(_options.KeepAliveOptions.MonitorInterval);
                 }
             }
             catch (OperationCanceledException)
@@ -56,11 +65,11 @@ namespace MQTTnet.Server
             }
             catch (Exception exception)
             {
-                _logger.Error(exception, "Unhandled exception while checking keep alive timeouts.");
+                _logger.Error(exception, "Unhandled exception while checking keep alive timeouts");
             }
             finally
             {
-                _logger.Verbose("Stopped checking keep alive timeout.");
+                _logger.Verbose("Stopped checking keep alive timeout");
             }
         }
 
@@ -98,13 +107,6 @@ namespace MQTTnet.Server
                     return;
                 }
 
-                if (connection.ChannelAdapter.IsReadingPacket)
-                {
-                    // The connection is currently reading a (large) packet. So it is obviously 
-                    // doing something and thus "connected".
-                    return;
-                }
-
                 // Values described here: [MQTT-3.1.2-24].
                 // If the client sends 5 sec. the server will allow up to 7.5 seconds.
                 // If the client sends 1 sec. the server will allow up to 1.5 seconds.
@@ -117,18 +119,18 @@ namespace MQTTnet.Server
                     return;
                 }
 
-                _logger.Warning("Client '{0}': Did not receive any packet or keep alive signal.", connection.Id);
+                _logger.Warning("Client '{0}': Did not receive any packet or keep alive signal", connection.Id);
 
                 // Execute the disconnection in background so that the keep alive monitor can continue
                 // with checking other connections.
                 // We do not need to wait for the task so no await is needed.
                 // Also the internal state of the connection must be swapped to "Finalizing" because the
                 // next iteration of the keep alive timer happens.
-                var _ = connection.StopAsync(MqttDisconnectReasonCode.KeepAliveTimeout);
+                _ = connection.StopAsync(DefaultDisconnectOptions);
             }
             catch (Exception exception)
             {
-                _logger.Error(exception, "Client {0}: Unhandled exception while checking keep alive timeouts.", connection.Id);
+                _logger.Error(exception, "Client {0}: Unhandled exception while checking keep alive timeouts", connection.Id);
             }
         }
 
